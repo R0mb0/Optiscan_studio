@@ -1,0 +1,2337 @@
+<!DOCTYPE html>
+<html lang="en" class="antialiased">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OptiScan Studio — Webcam Document Scanner</title>
+
+  <link rel="stylesheet" href="./libs/inter.css" />
+  <script src="./libs/tailwindcss.js"></script>
+  <script src="./libs/jszip.min.js"></script>
+
+  <!-- Tailwind Configuration -->
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'system-ui', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'sans-serif'],
+          },
+          boxShadow: {
+            'glass': '0 10px 30px -10px rgba(15, 23, 42, 0.12), 0 4px 10px -4px rgba(15, 23, 42, 0.06)',
+            'glass-dark': '0 14px 36px -10px rgba(0, 0, 0, 0.55), 0 4px 12px -4px rgba(0, 0, 0, 0.35)',
+          },
+          keyframes: {
+            shutterFlash: {
+              '0%': { opacity: '0.92' },
+              '100%': { opacity: '0' },
+            },
+            fadeSlideIn: {
+              '0%': { opacity: '0', transform: 'translateY(10px) scale(0.98)' },
+              '100%': { opacity: '1', transform: 'translateY(0) scale(1)' },
+            },
+            toastIn: {
+              '0%': { opacity: '0', transform: 'translateY(-12px) scale(0.96)' },
+              '100%': { opacity: '1', transform: 'translateY(0) scale(1)' },
+            },
+          },
+          animation: {
+            'shutter-flash': 'shutterFlash 320ms ease-out forwards',
+            'fade-slide-in': 'fadeSlideIn 300ms cubic-bezier(0.16, 1, 0.3, 1) forwards',
+            'toast-in': 'toastIn 260ms cubic-bezier(0.16, 1, 0.3, 1) forwards',
+          },
+        },
+      },
+    };
+  </script>
+
+  <!-- Early Theme Initialization (Prevents FOUC on load) -->
+  <script>
+    (function initEarlyTheme() {
+      try {
+        const saved = localStorage.getItem('optiscan_theme') || 'auto';
+        const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        if (saved === 'dark' || (saved === 'auto' && prefersDark)) {
+          document.documentElement.classList.add('dark');
+        } else {
+          document.documentElement.classList.remove('dark');
+        }
+      } catch (e) {}
+    })();
+  </script>
+
+  <style>
+    /* Custom modern scrollbars & range slider polish */
+    ::-webkit-scrollbar {
+      width: 7px;
+      height: 7px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(148, 163, 184, 0.45);
+      border-radius: 9999px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: rgba(100, 116, 139, 0.7);
+    }
+
+    input[type="range"].studio-slider {
+      -webkit-appearance: none;
+      appearance: none;
+      height: 6px;
+      border-radius: 9999px;
+      outline: none;
+      transition: background 150ms ease;
+    }
+    input[type="range"].studio-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 16px;
+      height: 16px;
+      border-radius: 9999px;
+      background: #2563eb;
+      border: 2px solid #ffffff;
+      box-shadow: 0 2px 6px rgba(37, 99, 235, 0.45);
+      cursor: pointer;
+      transition: transform 140ms ease, box-shadow 140ms ease;
+    }
+    .dark input[type="range"].studio-slider::-webkit-slider-thumb {
+      background: #3b82f6;
+      border-color: #0f172a;
+      box-shadow: 0 2px 8px rgba(59, 130, 246, 0.55);
+    }
+    input[type="range"].studio-slider::-webkit-slider-thumb:hover {
+      transform: scale(1.16);
+    }
+    input[type="range"].studio-slider::-moz-range-thumb {
+      width: 16px;
+      height: 16px;
+      border-radius: 9999px;
+      background: #2563eb;
+      border: 2px solid #ffffff;
+      box-shadow: 0 2px 6px rgba(37, 99, 235, 0.45);
+      cursor: pointer;
+    }
+
+    /* Interactive Crop Box Handles */
+    .crop-handle {
+      position: absolute;
+      width: 14px;
+      height: 14px;
+      background: #ef4444;
+      border: 2px solid #ffffff;
+      border-radius: 9999px;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
+      transform: translate(-50%, -50%);
+      transition: transform 120ms ease, background-color 120ms ease;
+      z-index: 30;
+      touch-action: none;
+    }
+    .crop-handle:hover,
+    .crop-handle.active {
+      transform: translate(-50%, -50%) scale(1.25);
+      background: #dc2626;
+    }
+
+    /* Drag & drop visual states for filmstrip */
+    .scan-card.dragging {
+      opacity: 0.45;
+      transform: scale(0.95);
+    }
+    .scan-card.drag-over {
+      box-shadow: 0 0 0 3px #3b82f6;
+      transform: translateY(-3px);
+    }
+
+    /* Interactive Circular Rotation Dial */
+    .rotation-dial-wrap {
+      touch-action: none;
+      user-select: none;
+    }
+    .rotation-knob {
+      transition: r 120ms ease, filter 120ms ease;
+      cursor: grab;
+    }
+    .rotation-knob:hover,
+    .rotation-dial-wrap.dragging .rotation-knob {
+      cursor: grabbing;
+      filter: drop-shadow(0 0 6px rgba(37, 99, 235, 0.75));
+    }
+  </style>
+</head>
+
+<body class="min-h-screen bg-slate-100 text-slate-900 dark:bg-slate-950 dark:text-slate-100 transition-colors duration-300 selection:bg-blue-500/20 selection:text-blue-600 dark:selection:text-blue-400">
+
+  <!-- Toast Notification Stack -->
+  <div id="toastContainer" class="fixed top-4 right-4 z-50 flex flex-col gap-2.5 max-w-sm w-[calc(100vw-2rem)] pointer-events-none"></div>
+
+  <!-- Hidden Native Elements (Video Source & JSON File Input) -->
+  <video id="webcamVideo" class="hidden" playsinline autoplay muted></video>
+  <input id="jsonFileInput" type="file" accept=".json,application/json" class="hidden" />
+
+  <!-- =========================================================================
+       TOP HEADER BAR
+       ========================================================================= -->
+  <header class="sticky top-0 z-40 backdrop-blur-xl bg-white/80 dark:bg-slate-900/80 border-b border-slate-200/80 dark:border-slate-800/80 transition-colors duration-300">
+    <div class="max-w-[1600px] mx-auto px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
+      <!-- Brand / Title -->
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-600 via-indigo-600 to-violet-600 flex items-center justify-center text-white shadow-lg shadow-blue-600/25">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 7V5a1 1 0 011-1h2M20 7V5a1 1 0 00-1-1h-2M4 17v2a1 1 0 001 1h2M20 17v2a1 1 0 01-1 1h-2M7 12h10M9 8h6M9 16h6" />
+          </svg>
+        </div>
+        <div>
+          <h1 class="text-lg sm:text-xl font-extrabold tracking-tight bg-gradient-to-r from-slate-900 to-slate-600 dark:from-white dark:to-slate-300 bg-clip-text text-transparent">
+            OptiScan Studio
+          </h1>
+          <p class="text-xs text-slate-500 dark:text-slate-400 font-medium">
+            Precision Webcam Document Scanner
+          </p>
+        </div>
+      </div>
+
+      <!-- Status Pill + Theme Switcher -->
+      <div class="flex items-center gap-3 flex-wrap">
+        <!-- Live Signal Badge -->
+        <div id="signalBadge" class="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold bg-slate-100 dark:bg-slate-800/90 text-slate-600 dark:text-slate-300 border border-slate-200/80 dark:border-slate-700/80">
+          <span id="signalDot" class="w-2 h-2 rounded-full bg-slate-400"></span>
+          <span id="signalText">Camera Idle</span>
+        </div>
+
+        <!-- Theme Switcher (Auto / Light / Dark) -->
+        <div class="flex items-center p-1 rounded-xl bg-slate-200/75 dark:bg-slate-800/90 border border-slate-300/60 dark:border-slate-700/70" role="group" aria-label="Theme Switcher">
+          <button type="button" data-theme-btn="auto" class="theme-btn px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all duration-200 flex items-center gap-1.5">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
+            Auto
+          </button>
+          <button type="button" data-theme-btn="light" class="theme-btn px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all duration-200 flex items-center gap-1.5">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
+            Light
+          </button>
+          <button type="button" data-theme-btn="dark" class="theme-btn px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all duration-200 flex items-center gap-1.5">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" /></svg>
+            Dark
+          </button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- =========================================================================
+       MAIN APPLICATION CONTAINER
+       ========================================================================= -->
+  <main class="max-w-[1600px] mx-auto px-4 sm:px-6 py-5 space-y-6">
+
+    <!-- TWO-COLUMN WORKSPACE -->
+    <section class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+
+      <!-- =====================================================================
+           LEFT COLUMN: LIVE WEBCAM PREVIEW & INTERACTIVE CROP TOOL
+           ===================================================================== -->
+      <div class="lg:col-span-7 xl:col-span-8 flex flex-col gap-4">
+        <div class="rounded-2xl bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border border-slate-200/80 dark:border-slate-800/80 shadow-glass dark:shadow-glass-dark p-3 sm:p-4 transition-all duration-300">
+
+          <!-- Preview Toolbar -->
+          <div class="flex flex-wrap items-center justify-between gap-2 mb-3 px-1">
+            <div class="flex items-center gap-2">
+              <span class="text-sm font-bold text-slate-800 dark:text-slate-100">Live Optical Preview</span>
+              <span id="resolutionBadge" class="text-[11px] font-mono px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700">
+                1280 × 720
+              </span>
+              <span id="cropSizeBadge" class="text-[11px] font-mono px-2 py-0.5 rounded-md bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400 border border-red-200/80 dark:border-red-900/60">
+                Crop: 1024 × 576
+              </span>
+            </div>
+            <div class="flex items-center gap-2">
+              <button type="button" id="fitCropBtn" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 transition-colors">
+                Reset Crop Box
+              </button>
+              <button type="button" id="toggleDemoBtn" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/50 dark:hover:bg-indigo-900/60 text-indigo-600 dark:text-indigo-300 border border-indigo-200/70 dark:border-indigo-800/60 transition-colors">
+                Demo Sheet
+              </button>
+            </div>
+          </div>
+
+          <!-- Aspect-Ratio Locked Preview Stage -->
+          <div class="w-full flex items-center justify-center bg-slate-950 rounded-xl overflow-hidden border border-slate-800/80 p-1 sm:p-2 min-h-[280px] sm:min-h-[380px]">
+            <div id="previewStage" class="relative w-full max-w-full overflow-hidden rounded-lg select-none bg-slate-900 shadow-inner" style="aspect-ratio: 16 / 9;">
+
+              <!-- Real-time Corrected Output Canvas (WebGL with 2D fallback) -->
+              <canvas id="previewCanvas" class="block w-full h-full object-contain"></canvas>
+
+              <!-- Shutter Flash Overlay -->
+              <div id="shutterFlash" class="pointer-events-none absolute inset-0 bg-white opacity-0 z-40"></div>
+
+              <!-- Darkened Outer Mask (4 non-overlapping panels around the red crop box) -->
+              <div id="cropMaskContainer" class="absolute inset-0 pointer-events-none z-10 hidden">
+                <div id="maskTop" class="absolute left-0 right-0 top-0 bg-slate-950/60 backdrop-blur-[0.5px]"></div>
+                <div id="maskBottom" class="absolute left-0 right-0 bottom-0 bg-slate-950/60 backdrop-blur-[0.5px]"></div>
+                <div id="maskLeft" class="absolute left-0 bg-slate-950/60 backdrop-blur-[0.5px]"></div>
+                <div id="maskRight" class="absolute right-0 bg-slate-950/60 backdrop-blur-[0.5px]"></div>
+              </div>
+
+              <!-- Interactive Red Crop Selection Box -->
+              <div id="cropBox" class="absolute z-20 hidden border-2 border-red-500 cursor-move touch-none" style="left: 10%; top: 10%; width: 80%; height: 80%;">
+                <!-- Subtle Rule-of-Thirds Alignment Guides -->
+                <div class="pointer-events-none absolute inset-0 grid grid-cols-3 grid-rows-3 opacity-35">
+                  <div class="border-r border-b border-red-400/50"></div>
+                  <div class="border-r border-b border-red-400/50"></div>
+                  <div class="border-b border-red-400/50"></div>
+                  <div class="border-r border-b border-red-400/50"></div>
+                  <div class="border-r border-b border-red-400/50"></div>
+                  <div class="border-b border-red-400/50"></div>
+                  <div class="border-r border-red-400/50"></div>
+                  <div class="border-r border-red-400/50"></div>
+                  <div></div>
+                </div>
+
+                <!-- 8 Resize Handles (4 corners + 4 edges) -->
+                <div class="crop-handle" data-handle="nw" style="left: 0%; top: 0%; cursor: nwse-resize;" title="Resize Top-Left"></div>
+                <div class="crop-handle" data-handle="n"  style="left: 50%; top: 0%; cursor: ns-resize;" title="Resize Top"></div>
+                <div class="crop-handle" data-handle="ne" style="left: 100%; top: 0%; cursor: nesw-resize;" title="Resize Top-Right"></div>
+                <div class="crop-handle" data-handle="e"  style="left: 100%; top: 50%; cursor: ew-resize;" title="Resize Right"></div>
+                <div class="crop-handle" data-handle="se" style="left: 100%; top: 100%; cursor: nwse-resize;" title="Resize Bottom-Right"></div>
+                <div class="crop-handle" data-handle="s"  style="left: 50%; top: 100%; cursor: ns-resize;" title="Resize Bottom"></div>
+                <div class="crop-handle" data-handle="sw" style="left: 0%; top: 100%; cursor: nesw-resize;" title="Resize Bottom-Left"></div>
+                <div class="crop-handle" data-handle="w"  style="left: 0%; top: 50%; cursor: ew-resize;" title="Resize Left"></div>
+              </div>
+
+              <!-- Google Meet-Style Camera Permission Overlay -->
+              <div id="permissionOverlay" class="absolute inset-0 z-30 flex flex-col items-center justify-center p-6 text-center bg-slate-900/95 backdrop-blur-md transition-opacity duration-300">
+                <div class="w-16 h-16 rounded-2xl bg-blue-500/15 border border-blue-400/30 flex items-center justify-center text-blue-400 mb-4 shadow-lg">
+                  <svg class="w-8 h-8" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                  </svg>
+                </div>
+                <h2 id="permissionTitle" class="text-lg sm:text-xl font-bold text-white mb-2">
+                  Allow OptiScan Studio to use your camera
+                </h2>
+                <p id="permissionDesc" class="text-xs sm:text-sm text-slate-300 max-w-md mb-6 leading-relaxed">
+                  Your webcam feed is processed 100% locally in your browser. No video or scanned documents are ever uploaded to a server.
+                </p>
+                <div class="flex flex-wrap items-center justify-center gap-3">
+                  <button type="button" id="grantCameraBtn" class="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 active:scale-[0.98] text-white text-sm font-semibold shadow-lg shadow-blue-600/30 transition-all flex items-center gap-2">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+                    Grant Camera Access
+                  </button>
+                  <button type="button" id="startDemoOverlayBtn" class="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 active:scale-[0.98] text-slate-200 border border-slate-700 text-sm font-semibold transition-all flex items-center gap-2">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                    Demo Mode / Sample Sheet
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Helper Hint + Primary Capture Button Bar -->
+          <div class="mt-4 flex flex-col sm:flex-row items-center justify-between gap-3 px-1">
+            <p class="text-xs text-slate-500 dark:text-slate-400">
+              Drag the <span class="text-red-500 font-semibold">red border</span> or corners to crop. Outside area is excluded. Press <kbd class="px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-800 text-[11px] font-mono">Space</kbd> to capture.
+            </p>
+            <button type="button" id="captureScanBtn" class="w-full sm:w-auto px-6 py-3 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 active:scale-[0.98] text-white font-bold text-sm shadow-lg shadow-blue-600/30 transition-all flex items-center justify-center gap-2.5 disabled:opacity-50 disabled:cursor-not-allowed">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                <circle cx="12" cy="13" r="3" />
+              </svg>
+              Capture Scan
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- =====================================================================
+           RIGHT COLUMN: SETTINGS & CONTROLS PANEL
+           ===================================================================== -->
+      <aside class="lg:col-span-5 xl:col-span-4 rounded-2xl bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border border-slate-200/80 dark:border-slate-800/80 shadow-glass dark:shadow-glass-dark flex flex-col max-h-[840px] transition-all duration-300">
+
+        <!-- Panel Header: Camera Selector & Auto/Manual Mode -->
+        <div class="p-4 border-b border-slate-200/80 dark:border-slate-800/80 space-y-3">
+          <div class="flex items-center justify-between gap-2">
+            <h2 class="text-sm font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">
+              Optical &amp; Color Controls
+            </h2>
+            <button type="button" id="resetSettingsBtn" class="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline">
+              Reset Defaults
+            </button>
+          </div>
+
+          <!-- Camera Source Dropdown -->
+          <div class="flex items-center gap-2">
+            <div class="relative flex-1">
+              <select id="cameraSelect" class="w-full appearance-none pl-3 pr-8 py-2 rounded-xl text-xs font-medium bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500 transition">
+                <option value="">Detecting cameras...</option>
+              </select>
+              <svg class="pointer-events-none w-4 h-4 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" /></svg>
+            </div>
+            <button type="button" id="refreshCamerasBtn" title="Refresh Camera Devices" class="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 transition">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+            </button>
+          </div>
+
+          <!-- Auto / Manual Mode Toggle -->
+          <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-100/90 dark:bg-slate-800/80 border border-slate-200/70 dark:border-slate-700/70">
+            <div>
+              <div class="text-xs font-bold text-slate-800 dark:text-slate-100">Adjustment Mode</div>
+              <div id="modeHintText" class="text-[11px] text-slate-500 dark:text-slate-400">Manual full control</div>
+            </div>
+            <div class="flex items-center p-0.5 rounded-lg bg-slate-200 dark:bg-slate-900 border border-slate-300/60 dark:border-slate-700">
+              <button type="button" id="modeAutoBtn" class="px-3 py-1 rounded-md text-xs font-semibold transition-all">Auto</button>
+              <button type="button" id="modeManualBtn" class="px-3 py-1 rounded-md text-xs font-semibold transition-all">Manual</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Scrollable Sliders Area -->
+        <div class="p-4 overflow-y-auto space-y-5 flex-1">
+
+          <!-- GROUP 1: GEOMETRY & PERSPECTIVE -->
+          <div class="space-y-3">
+            <h3 class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+              <svg class="w-3.5 h-3.5 text-blue-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6l16-2v16l-16-2V6z" /></svg>
+              Geometry &amp; Orientation
+            </h3>
+
+            <!-- Circular Rotation Dial + Quick Snap + Mirror/Flip Toggles -->
+            <div class="p-3 rounded-xl bg-slate-100/90 dark:bg-slate-800/70 border border-slate-200/80 dark:border-slate-700/70 space-y-3">
+              <div class="flex items-center gap-4">
+                <!-- Interactive Circular Rotation Dial -->
+                <div id="rotationDial" class="rotation-dial-wrap relative w-24 h-24 shrink-0 cursor-pointer" title="Drag around the circle to rotate (-180° to +180°)">
+                  <svg viewBox="0 0 100 100" class="w-full h-full overflow-visible">
+                    <!-- Outer Ring -->
+                    <circle cx="50" cy="50" r="40" fill="none" class="stroke-slate-300 dark:stroke-slate-700" stroke-width="4" />
+                    <!-- Cardinal & 45° Tick Marks -->
+                    <g class="stroke-slate-400 dark:stroke-slate-500" stroke-width="1.6" stroke-linecap="round">
+                      <line x1="50" y1="5"  x2="50" y2="12" />
+                      <line x1="95" y1="50" x2="88" y2="50" />
+                      <line x1="50" y1="95" x2="50" y2="88" />
+                      <line x1="5"  y1="50" x2="12" y2="50" />
+                      <line x1="81.8" y1="18.2" x2="77.5" y2="22.5" opacity="0.55" />
+                      <line x1="81.8" y1="81.8" x2="77.5" y2="77.5" opacity="0.55" />
+                      <line x1="18.2" y1="81.8" x2="22.5" y2="77.5" opacity="0.55" />
+                      <line x1="18.2" y1="18.2" x2="22.5" y2="22.5" opacity="0.55" />
+                    </g>
+                    <!-- Radial Indicator Line -->
+                    <line id="rotationNeedle" x1="50" y1="50" x2="50" y2="10" class="stroke-blue-600 dark:stroke-blue-400" stroke-width="2.5" stroke-linecap="round" />
+                    <!-- Center Pivot -->
+                    <circle cx="50" cy="50" r="3" class="fill-blue-600 dark:fill-blue-400" />
+                    <!-- Draggable Circumference Cursor / Knob -->
+                    <circle id="rotationKnob" cx="50" cy="10" r="7" class="rotation-knob fill-blue-600 dark:fill-blue-500 stroke-white dark:stroke-slate-900" stroke-width="2.5" />
+                  </svg>
+                  <!-- Center Angle Readout -->
+                  <div class="pointer-events-none absolute inset-0 flex items-center justify-center">
+                    <span id="rotationReadout" class="mt-7 px-1.5 py-0.5 rounded bg-white/85 dark:bg-slate-900/85 text-[10px] font-mono font-bold text-slate-800 dark:text-slate-100 shadow-sm">
+                      0.0°
+                    </span>
+                  </div>
+                </div>
+
+                <!-- Quick Snap Angles & Mirror Controls -->
+                <div class="flex-1 space-y-2.5 min-w-0">
+                  <div>
+                    <div class="text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1.5">Quick Rotation Snap</div>
+                    <div class="grid grid-cols-4 gap-1.5">
+                      <button type="button" data-rot-snap="-90" class="rot-snap-btn py-1 rounded-lg text-[11px] font-mono font-bold bg-white dark:bg-slate-900 hover:bg-blue-50 dark:hover:bg-blue-950/50 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 transition">-90°</button>
+                      <button type="button" data-rot-snap="0"   class="rot-snap-btn py-1 rounded-lg text-[11px] font-mono font-bold bg-white dark:bg-slate-900 hover:bg-blue-50 dark:hover:bg-blue-950/50 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 transition">0°</button>
+                      <button type="button" data-rot-snap="90"  class="rot-snap-btn py-1 rounded-lg text-[11px] font-mono font-bold bg-white dark:bg-slate-900 hover:bg-blue-50 dark:hover:bg-blue-950/50 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 transition">+90°</button>
+                      <button type="button" data-rot-snap="180" class="rot-snap-btn py-1 rounded-lg text-[11px] font-mono font-bold bg-white dark:bg-slate-900 hover:bg-blue-50 dark:hover:bg-blue-950/50 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 transition">180°</button>
+                    </div>
+                  </div>
+
+                  <!-- Mirror / Flip Buttons -->
+                  <div class="grid grid-cols-2 gap-1.5">
+                    <button type="button" id="flipHBtn" class="px-2 py-1.5 rounded-lg text-[11px] font-bold border transition-all flex items-center justify-center gap-1.5" aria-pressed="false">
+                      <svg class="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16M8 8l-4 4 4 4M16 8l4 4-4 4" />
+                      </svg>
+                      Flip H
+                    </button>
+                    <button type="button" id="flipVBtn" class="px-2 py-1.5 rounded-lg text-[11px] font-bold border transition-all flex items-center justify-center gap-1.5" aria-pressed="false">
+                      <svg class="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M4 12h16M8 8l4-4 4 4M8 16l4 4 4-4" />
+                      </svg>
+                      Flip V
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div id="geometryControls" class="space-y-2.5"></div>
+          </div>
+
+          <hr class="border-slate-200/80 dark:border-slate-800/80" />
+
+          <!-- GROUP 2: COLOR CORRECTION -->
+          <div class="space-y-3">
+            <div class="flex items-center justify-between">
+              <h3 class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+                <svg class="w-3.5 h-3.5 text-indigo-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01" /></svg>
+                Color Correction
+              </h3>
+              <!-- Document Mode Selector -->
+              <select id="colorModeSelect" class="text-[11px] font-semibold px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <option value="color">Full Color</option>
+                <option value="grayscale">Grayscale</option>
+                <option value="document">Document Enhance</option>
+              </select>
+            </div>
+            <div id="colorControls" class="space-y-2.5"></div>
+          </div>
+
+          <hr class="border-slate-200/80 dark:border-slate-800/80" />
+
+          <!-- GROUP 3: CROP COORDINATES -->
+          <div class="space-y-3">
+            <div class="flex items-center justify-between">
+              <h3 class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+                <svg class="w-3.5 h-3.5 text-red-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 2v14a2 2 0 002 2h14M18 22V8a2 2 0 00-2-2H2" /></svg>
+                Crop Region (%)
+              </h3>
+              <button type="button" id="cropResetInlineBtn" class="text-[11px] font-semibold text-red-500 hover:underline">
+                Reset Crop
+              </button>
+            </div>
+            <div id="cropControls" class="space-y-2.5"></div>
+          </div>
+        </div>
+
+        <!-- Panel Footer: Save / Load JSON Settings -->
+        <div class="p-4 border-t border-slate-200/80 dark:border-slate-800/80 bg-slate-50/70 dark:bg-slate-900/60 rounded-b-2xl grid grid-cols-2 gap-2.5">
+          <button type="button" id="saveJsonBtn" class="px-3 py-2.5 rounded-xl text-xs font-bold bg-slate-200/80 hover:bg-slate-300/80 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 transition-all flex items-center justify-center gap-1.5">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+            Save Settings (JSON)
+          </button>
+          <button type="button" id="loadJsonBtn" class="px-3 py-2.5 rounded-xl text-xs font-bold bg-slate-200/80 hover:bg-slate-300/80 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 transition-all flex items-center justify-center gap-1.5">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+            Load Settings (JSON)
+          </button>
+        </div>
+      </aside>
+    </section>
+
+    <!-- =======================================================================
+         CAPTURED SCANS FILMSTRIP CAROUSEL
+         ======================================================================= -->
+    <section class="rounded-2xl bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border border-slate-200/80 dark:border-slate-800/80 shadow-glass dark:shadow-glass-dark p-4 sm:p-5 transition-all duration-300">
+      <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+        <div class="flex items-center gap-2.5">
+          <h2 class="text-sm font-bold text-slate-800 dark:text-slate-100">Captured Scans Queue</h2>
+          <span id="scanCountBadge" class="px-2.5 py-0.5 rounded-full text-xs font-bold bg-blue-100 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300">
+            0 pages
+          </span>
+        </div>
+        <span class="text-xs text-slate-500 dark:text-slate-400">
+          Drag thumbnails to reorder sequence • Click image to inspect
+        </span>
+      </div>
+
+      <!-- Horizontal Scrollable Filmstrip -->
+      <div id="carouselTrack" class="flex items-stretch gap-3.5 overflow-x-auto pb-2 min-h-[156px]">
+        <!-- Empty State -->
+        <div id="emptyCarouselState" class="w-full flex flex-col items-center justify-center py-8 text-center rounded-xl border-2 border-dashed border-slate-200 dark:border-slate-800 text-slate-400 dark:text-slate-500">
+          <svg class="w-8 h-8 mb-2 opacity-60" fill="none" stroke="currentColor" stroke-width="1.6" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+          </svg>
+          <p class="text-xs font-semibold">No scans captured yet</p>
+          <p class="text-[11px] mt-0.5">Frame your document inside the red crop box and click "Capture Scan"</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- =======================================================================
+         EXPORT & DOWNLOAD BAR
+         ======================================================================= -->
+    <section class="rounded-2xl bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border border-slate-200/80 dark:border-slate-800/80 shadow-glass dark:shadow-glass-dark p-4 sm:p-5 transition-all duration-300">
+      <div class="flex flex-col lg:flex-row lg:items-end justify-between gap-4">
+
+        <!-- Export Configuration -->
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3.5 flex-1">
+          <!-- Format Selector -->
+          <div>
+            <label for="exportFormatSelect" class="block text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1.5">
+              Image Format
+            </label>
+            <select id="exportFormatSelect" class="w-full px-3 py-2.5 rounded-xl text-sm font-semibold bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500">
+              <option value="png">PNG (.png) — Lossless + pHYs DPI</option>
+              <option value="jpeg">JPEG (.jpg) — Compact + JFIF DPI</option>
+              <option value="webp">WebP (.webp) — Modern High Efficiency</option>
+              <option value="bmp">BMP (.bmp) — Uncompressed + Header DPI</option>
+            </select>
+          </div>
+
+          <!-- DPI Selector + Custom Numeric Input -->
+          <div>
+            <label for="exportDpiInput" class="block text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1.5">
+              Output DPI Metadata
+            </label>
+            <div class="flex items-center gap-2">
+              <select id="exportDpiPreset" class="w-1/2 px-2.5 py-2.5 rounded-xl text-sm font-semibold bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <option value="72">72 DPI</option>
+                <option value="150">150 DPI</option>
+                <option value="300" selected>300 DPI</option>
+                <option value="600">600 DPI</option>
+                <option value="custom">Custom</option>
+              </select>
+              <input id="exportDpiInput" type="number" min="72" max="1200" step="1" value="300" class="w-1/2 px-3 py-2.5 rounded-xl text-sm font-mono font-semibold bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+          </div>
+
+          <!-- Quality Slider (for JPEG / WebP) -->
+          <div>
+            <label for="exportQualityInput" class="flex items-center justify-between text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1.5">
+              <span>Compression Quality</span>
+              <span id="exportQualityLabel" class="font-mono text-slate-700 dark:text-slate-200">92%</span>
+            </label>
+            <div class="h-[42px] px-3 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center">
+              <input id="exportQualityInput" type="range" min="50" max="100" value="92" class="studio-slider w-full bg-slate-300 dark:bg-slate-700" />
+            </div>
+          </div>
+        </div>
+
+        <!-- Action Buttons: Download ZIP & Reset All -->
+        <div class="flex flex-wrap items-center gap-2.5">
+          <button type="button" id="downloadZipBtn" class="flex-1 sm:flex-none px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:scale-[0.98] text-white font-bold text-sm shadow-lg shadow-emerald-600/25 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+            Download ZIP
+          </button>
+          <button type="button" id="resetAllBtn" class="px-4 py-2.5 rounded-xl bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/50 dark:hover:bg-rose-900/60 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-900/60 font-bold text-sm transition-all flex items-center justify-center gap-1.5">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+            Reset All
+          </button>
+        </div>
+      </div>
+
+      <!-- Export Progress Bar -->
+      <div id="exportProgressWrap" class="hidden mt-4 pt-3 border-t border-slate-200/80 dark:border-slate-800/80">
+        <div class="flex items-center justify-between text-xs font-semibold mb-1.5">
+          <span id="exportProgressText" class="text-slate-600 dark:text-slate-300">Packaging scans...</span>
+          <span id="exportProgressPct" class="font-mono text-emerald-600 dark:text-emerald-400">0%</span>
+        </div>
+        <div class="w-full h-2.5 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
+          <div id="exportProgressBar" class="h-full w-0 rounded-full bg-gradient-to-r from-emerald-500 to-teal-400 transition-all duration-200"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- =========================================================================
+       MODALS (Lightbox Preview & Reset All Confirmation — No alert/confirm!)
+       ========================================================================= -->
+  <!-- Lightbox Modal -->
+  <div id="lightboxModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-slate-950/85 backdrop-blur-md p-4">
+    <div class="relative max-w-4xl w-full max-h-[90vh] flex flex-col items-center animate-fade-slide-in">
+      <div class="w-full flex items-center justify-between mb-3 text-white">
+        <span id="lightboxTitle" class="text-sm font-bold">Scan #1</span>
+        <button type="button" id="closeLightboxBtn" class="p-2 rounded-xl bg-white/10 hover:bg-white/20 transition">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+        </button>
+      </div>
+      <img id="lightboxImg" src="" alt="Scan Preview" class="max-h-[80vh] max-w-full rounded-xl shadow-2xl border border-white/15 object-contain bg-slate-900" />
+    </div>
+  </div>
+
+  <!-- Reset Confirmation Modal -->
+  <div id="resetModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-slate-950/70 backdrop-blur-sm p-4">
+    <div class="w-full max-w-md rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl p-6 animate-fade-slide-in">
+      <h3 class="text-base font-bold text-slate-900 dark:text-white mb-1.5">Reset Workspace?</h3>
+      <p class="text-xs text-slate-500 dark:text-slate-400 mb-4 leading-relaxed">
+        Choose whether to clear only your captured scans or also restore all optical, color, and crop settings to factory defaults.
+      </p>
+      <label class="flex items-center gap-2.5 p-3 rounded-xl bg-slate-100 dark:bg-slate-800/80 mb-5 cursor-pointer">
+        <input id="resetIncludeSettings" type="checkbox" checked class="w-4 h-4 rounded text-blue-600 focus:ring-blue-500" />
+        <span class="text-xs font-semibold text-slate-700 dark:text-slate-200">Also reset all optical &amp; color settings</span>
+      </label>
+      <div class="flex items-center justify-end gap-2.5">
+        <button type="button" id="cancelResetBtn" class="px-4 py-2 rounded-xl text-xs font-bold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 transition">
+          Cancel
+        </button>
+        <button type="button" id="confirmResetBtn" class="px-4 py-2 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-500 text-white shadow-md shadow-rose-600/25 transition">
+          Confirm Reset
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- =========================================================================
+       APPLICATION JAVASCRIPT
+       ========================================================================= -->
+  <script>
+    (function () {
+      'use strict';
+
+      /* =====================================================================
+         1. PARAMETER SCHEMA & DEFAULT STATE
+         ===================================================================== */
+      const PARAM_DEFS = {
+        geometry: [
+          { key: 'keystoneH', label: 'Horizontal Keystone', min: -50,  max: 50,  step: 0.5, default: 0,   unit: '' },
+          { key: 'keystoneV', label: 'Vertical Keystone',   min: -50,  max: 50,  step: 0.5, default: 0,   unit: '' },
+          { key: 'rotation',  label: 'Free Rotation',       min: -180, max: 180, step: 0.5, default: 0,   unit: '°' },
+          { key: 'zoom',      label: 'Zoom',                min: 100,  max: 300, step: 1,   default: 100, unit: '%' },
+        ],
+        color: [
+          { key: 'brightness', label: 'Brightness', min: -100, max: 100, step: 1, default: 0, unit: '' },
+          { key: 'contrast',   label: 'Contrast',   min: -100, max: 100, step: 1, default: 0, unit: '' },
+          { key: 'saturation', label: 'Saturation', min: -100, max: 100, step: 1, default: 0, unit: '' },
+          { key: 'hue',        label: 'Hue Shift',  min: -180, max: 180, step: 1, default: 0, unit: '°' },
+          { key: 'gamma',      label: 'Gamma',      min: 0.2,  max: 3.0, step: 0.05, default: 1.0, unit: '' },
+          { key: 'sharpness',  label: 'Sharpness',  min: 0,    max: 100, step: 1, default: 0, unit: '%' },
+        ],
+        crop: [
+          { key: 'x', label: 'Crop X',      min: 0, max: 95,  step: 0.5, default: 10, unit: '%' },
+          { key: 'y', label: 'Crop Y',      min: 0, max: 95,  step: 0.5, default: 10, unit: '%' },
+          { key: 'w', label: 'Crop Width',  min: 5, max: 100, step: 0.5, default: 80, unit: '%' },
+          { key: 'h', label: 'Crop Height', min: 5, max: 100, step: 0.5, default: 80, unit: '%' },
+        ],
+      };
+
+      function createDefaultSettings() {
+        return {
+          schema: 'optiscan-studio-settings-v1',
+          autoMode: false,
+          colorMode: 'color', // 'color' | 'grayscale' | 'document'
+          geometry: { keystoneH: 0, keystoneV: 0, rotation: 0, flipH: false, flipV: false, zoom: 100 },
+          color: { brightness: 0, contrast: 0, saturation: 0, hue: 0, gamma: 1.0, sharpness: 0 },
+          crop: { x: 10, y: 10, w: 80, h: 80 },
+        };
+      }
+
+      const state = {
+        settings: createDefaultSettings(),
+        autoOffsets: { brightness: 0, contrast: 0 },
+        sourceMode: 'none', // 'none' | 'webcam' | 'demo'
+        stream: null,
+        activeDeviceId: '',
+        sourceWidth: 1280,
+        sourceHeight: 720,
+        scans: [], // { id, dataUrl, width, height, timestamp }
+        nextScanId: 1,
+        draggedScanId: null,
+        theme: localStorage.getItem('optiscan_theme') || 'auto',
+      };
+
+      /* =====================================================================
+         2. DOM REFERENCES
+         ===================================================================== */
+      const els = {
+        video: document.getElementById('webcamVideo'),
+        previewStage: document.getElementById('previewStage'),
+        previewCanvas: document.getElementById('previewCanvas'),
+        shutterFlash: document.getElementById('shutterFlash'),
+        permissionOverlay: document.getElementById('permissionOverlay'),
+        permissionTitle: document.getElementById('permissionTitle'),
+        permissionDesc: document.getElementById('permissionDesc'),
+        grantCameraBtn: document.getElementById('grantCameraBtn'),
+        startDemoOverlayBtn: document.getElementById('startDemoOverlayBtn'),
+        toggleDemoBtn: document.getElementById('toggleDemoBtn'),
+        fitCropBtn: document.getElementById('fitCropBtn'),
+        captureScanBtn: document.getElementById('captureScanBtn'),
+        cameraSelect: document.getElementById('cameraSelect'),
+        refreshCamerasBtn: document.getElementById('refreshCamerasBtn'),
+        modeAutoBtn: document.getElementById('modeAutoBtn'),
+        modeManualBtn: document.getElementById('modeManualBtn'),
+        modeHintText: document.getElementById('modeHintText'),
+        colorModeSelect: document.getElementById('colorModeSelect'),
+        resetSettingsBtn: document.getElementById('resetSettingsBtn'),
+        geometryControls: document.getElementById('geometryControls'),
+        colorControls: document.getElementById('colorControls'),
+        cropControls: document.getElementById('cropControls'),
+        rotationDial: document.getElementById('rotationDial'),
+        rotationNeedle: document.getElementById('rotationNeedle'),
+        rotationKnob: document.getElementById('rotationKnob'),
+        rotationReadout: document.getElementById('rotationReadout'),
+        flipHBtn: document.getElementById('flipHBtn'),
+        flipVBtn: document.getElementById('flipVBtn'),
+        cropResetInlineBtn: document.getElementById('cropResetInlineBtn'),
+        saveJsonBtn: document.getElementById('saveJsonBtn'),
+        loadJsonBtn: document.getElementById('loadJsonBtn'),
+        jsonFileInput: document.getElementById('jsonFileInput'),
+        cropMaskContainer: document.getElementById('cropMaskContainer'),
+        maskTop: document.getElementById('maskTop'),
+        maskBottom: document.getElementById('maskBottom'),
+        maskLeft: document.getElementById('maskLeft'),
+        maskRight: document.getElementById('maskRight'),
+        cropBox: document.getElementById('cropBox'),
+        resolutionBadge: document.getElementById('resolutionBadge'),
+        cropSizeBadge: document.getElementById('cropSizeBadge'),
+        signalDot: document.getElementById('signalDot'),
+        signalText: document.getElementById('signalText'),
+        carouselTrack: document.getElementById('carouselTrack'),
+        emptyCarouselState: document.getElementById('emptyCarouselState'),
+        scanCountBadge: document.getElementById('scanCountBadge'),
+        exportFormatSelect: document.getElementById('exportFormatSelect'),
+        exportDpiPreset: document.getElementById('exportDpiPreset'),
+        exportDpiInput: document.getElementById('exportDpiInput'),
+        exportQualityInput: document.getElementById('exportQualityInput'),
+        exportQualityLabel: document.getElementById('exportQualityLabel'),
+        downloadZipBtn: document.getElementById('downloadZipBtn'),
+        resetAllBtn: document.getElementById('resetAllBtn'),
+        exportProgressWrap: document.getElementById('exportProgressWrap'),
+        exportProgressText: document.getElementById('exportProgressText'),
+        exportProgressPct: document.getElementById('exportProgressPct'),
+        exportProgressBar: document.getElementById('exportProgressBar'),
+        toastContainer: document.getElementById('toastContainer'),
+        lightboxModal: document.getElementById('lightboxModal'),
+        lightboxTitle: document.getElementById('lightboxTitle'),
+        lightboxImg: document.getElementById('lightboxImg'),
+        closeLightboxBtn: document.getElementById('closeLightboxBtn'),
+        resetModal: document.getElementById('resetModal'),
+        resetIncludeSettings: document.getElementById('resetIncludeSettings'),
+        cancelResetBtn: document.getElementById('cancelResetBtn'),
+        confirmResetBtn: document.getElementById('confirmResetBtn'),
+      };
+
+      const controlRefs = {}; // Map "group.key" -> { range, number }
+
+      /* =====================================================================
+         3. TOAST NOTIFICATIONS (Replaces alert/confirm)
+         ===================================================================== */
+      function showToast(message, type = 'info', duration = 3600) {
+        const colors = {
+          success: 'bg-emerald-600 text-white border-emerald-500/40',
+          error:   'bg-rose-600 text-white border-rose-500/40',
+          warning: 'bg-amber-500 text-slate-950 border-amber-400/40',
+          info:    'bg-slate-800 dark:bg-slate-700 text-white border-slate-600/40',
+        };
+        const icons = {
+          success: '<path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />',
+          error:   '<path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />',
+          warning: '<path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />',
+          info:    '<path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />',
+        };
+        const toast = document.createElement('div');
+        toast.className = `pointer-events-auto flex items-start gap-2.5 px-4 py-3 rounded-xl border shadow-xl text-xs font-semibold animate-toast-in ${colors[type] || colors.info}`;
+        toast.innerHTML = `
+          <svg class="w-4 h-4 shrink-0 mt-0.5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">${icons[type] || icons.info}</svg>
+          <span class="flex-1 leading-snug">${escapeHtml(message)}</span>
+        `;
+        els.toastContainer.appendChild(toast);
+        setTimeout(() => {
+          toast.style.transition = 'opacity 250ms ease, transform 250ms ease';
+          toast.style.opacity = '0';
+          toast.style.transform = 'translateY(-8px)';
+          setTimeout(() => toast.remove(), 260);
+        }, duration);
+      }
+
+      function escapeHtml(str) {
+        return String(str).replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+      }
+
+      /* =====================================================================
+         4. THEME MANAGEMENT (Auto / Light / Dark)
+         ===================================================================== */
+      const mediaQueryDark = window.matchMedia('(prefers-color-scheme: dark)');
+
+      function applyTheme(mode) {
+        state.theme = mode;
+        try { localStorage.setItem('optiscan_theme', mode); } catch (e) {}
+        const isDark = mode === 'dark' || (mode === 'auto' && mediaQueryDark.matches);
+        document.documentElement.classList.toggle('dark', isDark);
+
+        document.querySelectorAll('.theme-btn').forEach(btn => {
+          const active = btn.dataset.themeBtn === mode;
+          btn.classList.toggle('bg-white', active);
+          btn.classList.toggle('dark:bg-slate-700', active);
+          btn.classList.toggle('text-blue-600', active);
+          btn.classList.toggle('dark:text-blue-300', active);
+          btn.classList.toggle('shadow-sm', active);
+          btn.classList.toggle('text-slate-600', !active);
+          btn.classList.toggle('dark:text-slate-400', !active);
+        });
+      }
+
+      document.querySelectorAll('.theme-btn').forEach(btn => {
+        btn.addEventListener('click', () => applyTheme(btn.dataset.themeBtn));
+      });
+      mediaQueryDark.addEventListener('change', () => {
+        if (state.theme === 'auto') applyTheme('auto');
+      });
+      applyTheme(state.theme);
+
+      /* =====================================================================
+         5. DYNAMIC SLIDER + NUMERIC INPUT BUILDER
+         ===================================================================== */
+      function buildControlGroup(groupName, containerEl) {
+        containerEl.innerHTML = '';
+        PARAM_DEFS[groupName].forEach(def => {
+          const row = document.createElement('div');
+          row.className = 'flex items-center gap-2.5';
+
+          const label = document.createElement('label');
+          label.className = 'w-32 shrink-0 text-xs font-medium text-slate-700 dark:text-slate-300 truncate cursor-pointer select-none';
+          label.textContent = def.label;
+          label.title = `${def.label} (Double-click to reset to ${def.default}${def.unit})`;
+
+          const range = document.createElement('input');
+          range.type = 'range';
+          range.min = def.min;
+          range.max = def.max;
+          range.step = def.step;
+          range.value = state.settings[groupName][def.key];
+          range.className = 'studio-slider flex-1 bg-slate-200 dark:bg-slate-700';
+
+          const numWrap = document.createElement('div');
+          numWrap.className = 'relative w-20 shrink-0';
+
+          const num = document.createElement('input');
+          num.type = 'number';
+          num.min = def.min;
+          num.max = def.max;
+          num.step = def.step;
+          num.value = state.settings[groupName][def.key];
+          num.className = 'w-full px-2 py-1 rounded-lg text-xs font-mono font-semibold text-right bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500';
+
+          numWrap.appendChild(num);
+          row.appendChild(label);
+          row.appendChild(range);
+          row.appendChild(numWrap);
+          containerEl.appendChild(row);
+
+          const refKey = `${groupName}.${def.key}`;
+          controlRefs[refKey] = { range, num, def };
+
+          const handleUpdate = (rawVal) => {
+            let val = parseFloat(rawVal);
+            if (!Number.isFinite(val)) return;
+            val = Math.min(def.max, Math.max(def.min, val));
+
+            if (groupName === 'crop') {
+              applyCropCoordinate(def.key, val);
+            } else {
+              state.settings[groupName][def.key] = val;
+              range.value = val;
+              num.value = val;
+              if (groupName === 'geometry' && def.key === 'rotation') {
+                updateRotationDialUI();
+              }
+            }
+          };
+
+          range.addEventListener('input', (e) => handleUpdate(e.target.value));
+          num.addEventListener('input', (e) => handleUpdate(e.target.value));
+          num.addEventListener('blur', () => {
+            num.value = state.settings[groupName][def.key];
+          });
+          label.addEventListener('dblclick', () => handleUpdate(def.default));
+        });
+      }
+
+      function syncAllControlsFromState() {
+        ['geometry', 'color', 'crop'].forEach(group => {
+          PARAM_DEFS[group].forEach(def => {
+            const ref = controlRefs[`${group}.${def.key}`];
+            if (!ref) return;
+            const val = Number(state.settings[group][def.key].toFixed(2));
+            ref.range.value = val;
+            ref.num.value = val;
+          });
+        });
+
+        els.colorModeSelect.value = state.settings.colorMode;
+        updateAutoModeUI();
+        updateRotationDialUI();
+        updateFlipButtonsUI();
+        updateCropOverlayUI();
+      }
+
+      /* ---------------------------------------------------------------------
+         CIRCULAR ROTATION DIAL & MIRROR/FLIP CONTROLS
+         --------------------------------------------------------------------- */
+      function updateRotationDialUI() {
+        const deg = state.settings.geometry.rotation;
+        const rad = ((deg - 90) * Math.PI) / 180; // 0° points straight up (12 o'clock)
+        const r = 40;
+        const kx = 50 + r * Math.cos(rad);
+        const ky = 50 + r * Math.sin(rad);
+
+        els.rotationKnob.setAttribute('cx', kx.toFixed(2));
+        els.rotationKnob.setAttribute('cy', ky.toFixed(2));
+        els.rotationNeedle.setAttribute('x2', kx.toFixed(2));
+        els.rotationNeedle.setAttribute('y2', ky.toFixed(2));
+        els.rotationReadout.textContent = `${deg.toFixed(1)}°`;
+
+        const ref = controlRefs['geometry.rotation'];
+        if (ref) {
+          ref.range.value = deg;
+          ref.num.value = deg;
+        }
+      }
+
+      function setRotationDegrees(rawDeg) {
+        let deg = Math.round(rawDeg * 2) / 2; // 0.5° precision
+        if (deg > 180) deg -= 360;
+        if (deg < -180) deg += 360;
+        deg = Math.max(-180, Math.min(180, deg));
+        state.settings.geometry.rotation = deg;
+        updateRotationDialUI();
+      }
+
+      let isDraggingDial = false;
+
+      function updateRotationFromPointer(e) {
+        const rect = els.rotationDial.getBoundingClientRect();
+        const cx = rect.left + rect.width / 2;
+        const cy = rect.top + rect.height / 2;
+        const dx = e.clientX - cx;
+        const dy = e.clientY - cy;
+        let deg = (Math.atan2(dy, dx) * 180) / Math.PI + 90;
+        if (deg > 180) deg -= 360;
+        if (deg < -180) deg += 360;
+        setRotationDegrees(deg);
+      }
+
+      els.rotationDial.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        isDraggingDial = true;
+        els.rotationDial.classList.add('dragging');
+        els.rotationDial.setPointerCapture(e.pointerId);
+        updateRotationFromPointer(e);
+      });
+      els.rotationDial.addEventListener('pointermove', (e) => {
+        if (!isDraggingDial) return;
+        updateRotationFromPointer(e);
+      });
+      const endDialDrag = () => {
+        if (!isDraggingDial) return;
+        isDraggingDial = false;
+        els.rotationDial.classList.remove('dragging');
+      };
+      els.rotationDial.addEventListener('pointerup', endDialDrag);
+      els.rotationDial.addEventListener('pointercancel', endDialDrag);
+
+      document.querySelectorAll('.rot-snap-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          setRotationDegrees(parseFloat(btn.dataset.rotSnap));
+        });
+      });
+
+      function updateFlipButtonsUI() {
+        const { flipH, flipV } = state.settings.geometry;
+        const activeCls = 'px-2 py-1.5 rounded-lg text-[11px] font-bold border transition-all flex items-center justify-center gap-1.5 bg-blue-600 text-white border-blue-600 shadow-sm shadow-blue-600/25';
+        const idleCls   = 'px-2 py-1.5 rounded-lg text-[11px] font-bold border transition-all flex items-center justify-center gap-1.5 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700';
+
+        els.flipHBtn.className = flipH ? activeCls : idleCls;
+        els.flipHBtn.setAttribute('aria-pressed', String(flipH));
+        els.flipVBtn.className = flipV ? activeCls : idleCls;
+        els.flipVBtn.setAttribute('aria-pressed', String(flipV));
+      }
+
+      els.flipHBtn.addEventListener('click', () => {
+        state.settings.geometry.flipH = !state.settings.geometry.flipH;
+        updateFlipButtonsUI();
+      });
+      els.flipVBtn.addEventListener('click', () => {
+        state.settings.geometry.flipV = !state.settings.geometry.flipV;
+        updateFlipButtonsUI();
+      });
+
+      function updateAutoModeUI() {
+        const isAuto = state.settings.autoMode;
+        els.modeAutoBtn.className = isAuto
+          ? 'px-3 py-1 rounded-md text-xs font-bold bg-blue-600 text-white shadow-sm transition-all'
+          : 'px-3 py-1 rounded-md text-xs font-semibold text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-all';
+        els.modeManualBtn.className = !isAuto
+          ? 'px-3 py-1 rounded-md text-xs font-bold bg-blue-600 text-white shadow-sm transition-all'
+          : 'px-3 py-1 rounded-md text-xs font-semibold text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-all';
+        els.modeHintText.textContent = isAuto
+          ? 'Auto document contrast & exposure active'
+          : 'Manual full control';
+      }
+
+      buildControlGroup('geometry', els.geometryControls);
+      buildControlGroup('color', els.colorControls);
+      buildControlGroup('crop', els.cropControls);
+
+      els.modeAutoBtn.addEventListener('click', () => {
+        state.settings.autoMode = true;
+        updateAutoModeUI();
+        showToast('Auto document optimization enabled', 'info', 2200);
+      });
+      els.modeManualBtn.addEventListener('click', () => {
+        state.settings.autoMode = false;
+        state.autoOffsets = { brightness: 0, contrast: 0 };
+        updateAutoModeUI();
+      });
+      els.colorModeSelect.addEventListener('change', (e) => {
+        state.settings.colorMode = e.target.value;
+      });
+      els.resetSettingsBtn.addEventListener('click', () => {
+        state.settings = createDefaultSettings();
+        state.autoOffsets = { brightness: 0, contrast: 0 };
+        syncAllControlsFromState();
+        showToast('Optical & color settings restored to defaults', 'info', 2200);
+      });
+
+      /* =====================================================================
+         6. INTERACTIVE RED CROP OVERLAY (2-WAY SYNCED WITH SLIDERS)
+         ===================================================================== */
+      function applyCropCoordinate(key, val) {
+        const c = state.settings.crop;
+        const minSize = 5;
+        if (key === 'x') {
+          c.x = Math.max(0, Math.min(100 - minSize, val));
+          if (c.x + c.w > 100) c.w = Math.max(minSize, 100 - c.x);
+        } else if (key === 'y') {
+          c.y = Math.max(0, Math.min(100 - minSize, val));
+          if (c.y + c.h > 100) c.h = Math.max(minSize, 100 - c.y);
+        } else if (key === 'w') {
+          c.w = Math.max(minSize, Math.min(100 - c.x, val));
+        } else if (key === 'h') {
+          c.h = Math.max(minSize, Math.min(100 - c.y, val));
+        }
+        // Round neatly to 0.5%
+        c.x = Math.round(c.x * 2) / 2;
+        c.y = Math.round(c.y * 2) / 2;
+        c.w = Math.round(c.w * 2) / 2;
+        c.h = Math.round(c.h * 2) / 2;
+
+        ['x', 'y', 'w', 'h'].forEach(k => {
+          const ref = controlRefs[`crop.${k}`];
+          if (ref) {
+            ref.range.value = c[k];
+            ref.num.value = c[k];
+          }
+        });
+        updateCropOverlayUI();
+      }
+
+      function updateCropOverlayUI() {
+        const { x, y, w, h } = state.settings.crop;
+        const rightPct = Math.max(0, 100 - (x + w));
+        const bottomPct = Math.max(0, 100 - (y + h));
+
+        els.cropBox.style.left = `${x}%`;
+        els.cropBox.style.top = `${y}%`;
+        els.cropBox.style.width = `${w}%`;
+        els.cropBox.style.height = `${h}%`;
+
+        // Update 4 darkened outer mask panels
+        els.maskTop.style.height = `${y}%`;
+        els.maskBottom.style.height = `${bottomPct}%`;
+        els.maskLeft.style.top = `${y}%`;
+        els.maskLeft.style.height = `${h}%`;
+        els.maskLeft.style.width = `${x}%`;
+        els.maskRight.style.top = `${y}%`;
+        els.maskRight.style.height = `${h}%`;
+        els.maskRight.style.width = `${rightPct}%`;
+
+        // Update pixel dimension badge
+        const pxW = Math.max(1, Math.round((w / 100) * state.sourceWidth));
+        const pxH = Math.max(1, Math.round((h / 100) * state.sourceHeight));
+        els.cropSizeBadge.textContent = `Crop: ${pxW} × ${pxH}`;
+      }
+
+      // Pointer drag/resize interaction for crop box & all 8 handles
+      let cropDrag = null;
+
+      els.cropBox.addEventListener('pointerdown', (e) => {
+        if (state.sourceMode === 'none') return;
+        e.preventDefault();
+        const handleEl = e.target.closest('.crop-handle');
+        const mode = handleEl ? handleEl.dataset.handle : 'move';
+        const rect = els.previewStage.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return;
+
+        if (handleEl) handleEl.classList.add('active');
+        cropDrag = {
+          mode,
+          handleEl,
+          pointerId: e.pointerId,
+          startX: e.clientX,
+          startY: e.clientY,
+          stageW: rect.width,
+          stageH: rect.height,
+          orig: { ...state.settings.crop },
+        };
+        els.cropBox.setPointerCapture(e.pointerId);
+      });
+
+      els.cropBox.addEventListener('pointermove', (e) => {
+        if (!cropDrag) return;
+        const dxPct = ((e.clientX - cropDrag.startX) / cropDrag.stageW) * 100;
+        const dyPct = ((e.clientY - cropDrag.startY) / cropDrag.stageH) * 100;
+        const o = cropDrag.orig;
+        const minSize = 5;
+        let nx = o.x, ny = o.y, nw = o.w, nh = o.h;
+
+        if (cropDrag.mode === 'move') {
+          nx = Math.max(0, Math.min(100 - o.w, o.x + dxPct));
+          ny = Math.max(0, Math.min(100 - o.h, o.y + dyPct));
+        } else {
+          if (cropDrag.mode.includes('e')) {
+            nw = Math.max(minSize, Math.min(100 - o.x, o.w + dxPct));
+          }
+          if (cropDrag.mode.includes('s')) {
+            nh = Math.max(minSize, Math.min(100 - o.y, o.h + dyPct));
+          }
+          if (cropDrag.mode.includes('w')) {
+            const maxShift = o.w - minSize;
+            const shift = Math.max(-o.x, Math.min(maxShift, dxPct));
+            nx = o.x + shift;
+            nw = o.w - shift;
+          }
+          if (cropDrag.mode.includes('n')) {
+            const maxShift = o.h - minSize;
+            const shift = Math.max(-o.y, Math.min(maxShift, dyPct));
+            ny = o.y + shift;
+            nh = o.h - shift;
+          }
+        }
+
+        state.settings.crop.x = Math.round(nx * 2) / 2;
+        state.settings.crop.y = Math.round(ny * 2) / 2;
+        state.settings.crop.w = Math.round(nw * 2) / 2;
+        state.settings.crop.h = Math.round(nh * 2) / 2;
+
+        ['x', 'y', 'w', 'h'].forEach(k => {
+          const ref = controlRefs[`crop.${k}`];
+          if (ref) {
+            ref.range.value = state.settings.crop[k];
+            ref.num.value = state.settings.crop[k];
+          }
+        });
+        updateCropOverlayUI();
+      });
+
+      const endCropDrag = () => {
+        if (!cropDrag) return;
+        if (cropDrag.handleEl) cropDrag.handleEl.classList.remove('active');
+        cropDrag = null;
+      };
+      els.cropBox.addEventListener('pointerup', endCropDrag);
+      els.cropBox.addEventListener('pointercancel', endCropDrag);
+
+      els.fitCropBtn.addEventListener('click', () => {
+        state.settings.crop = { x: 10, y: 10, w: 80, h: 80 };
+        syncAllControlsFromState();
+      });
+      els.cropResetInlineBtn.addEventListener('click', () => {
+        state.settings.crop = { x: 10, y: 10, w: 80, h: 80 };
+        syncAllControlsFromState();
+      });
+
+      /* =====================================================================
+         7. DEMO SHEET GENERATOR (Procedural Document for Webcam-less Testing)
+         ===================================================================== */
+      const demoCanvas = document.createElement('canvas');
+      demoCanvas.width = 1280;
+      demoCanvas.height = 960;
+      const demoCtx = demoCanvas.getContext('2d');
+
+      function renderDemoSheet(timeMs) {
+        const w = demoCanvas.width;
+        const h = demoCanvas.height;
+        const ctx = demoCtx;
+
+        // Warm wooden/matte desk background
+        const bgGrad = ctx.createLinearGradient(0, 0, w, h);
+        bgGrad.addColorStop(0, '#334155');
+        bgGrad.addColorStop(1, '#1e293b');
+        ctx.fillStyle = bgGrad;
+        ctx.fillRect(0, 0, w, h);
+
+        // Subtle desk grid lines
+        ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+        ctx.lineWidth = 1;
+        for (let gx = 0; gx < w; gx += 48) {
+          ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, h); ctx.stroke();
+        }
+        for (let gy = 0; gy < h; gy += 48) {
+          ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(w, gy); ctx.stroke();
+        }
+
+        // Slightly tilted paper sheet to showcase Tilt + Keystone correction
+        ctx.save();
+        ctx.translate(w / 2, h / 2);
+        ctx.rotate(-0.025);
+
+        // Soft drop shadow
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.45)';
+        ctx.shadowBlur = 32;
+        ctx.shadowOffsetX = 10;
+        ctx.shadowOffsetY = 16;
+
+        // Paper body (off-white warm paper)
+        const pw = 660;
+        const ph = 840;
+        ctx.fillStyle = '#f8f7f2';
+        ctx.fillRect(-pw / 2, -ph / 2, pw, ph);
+        ctx.shadowColor = 'transparent';
+
+        // Subtle ambient lighting gradient across paper
+        const shimmer = Math.sin(timeMs * 0.0012) * 0.025;
+        const lightGrad = ctx.createLinearGradient(-pw / 2, -ph / 2, pw / 2, ph / 2);
+        lightGrad.addColorStop(0, `rgba(255, 252, 240, ${0.18 + shimmer})`);
+        lightGrad.addColorStop(1, 'rgba(148, 163, 184, 0.14)');
+        ctx.fillStyle = lightGrad;
+        ctx.fillRect(-pw / 2, -ph / 2, pw, ph);
+
+        // Header Accent Bar
+        ctx.fillStyle = '#1e3a8a';
+        ctx.fillRect(-pw / 2 + 44, -ph / 2 + 44, pw - 88, 12);
+
+        // Document Title
+        ctx.fillStyle = '#0f172a';
+        ctx.font = 'bold 34px Inter, sans-serif';
+        ctx.fillText('OPTISCAN SAMPLE DOCUMENT', -pw / 2 + 44, -ph / 2 + 106);
+
+        ctx.fillStyle = '#475569';
+        ctx.font = '600 17px Inter, sans-serif';
+        ctx.fillText('CALIBRATION SHEET • REF #OS-2026-842', -pw / 2 + 44, -ph / 2 + 136);
+
+        // Registration Marks (4 Corners)
+        const markPts = [
+          [-pw / 2 + 26, -ph / 2 + 26],
+          [pw / 2 - 26, -ph / 2 + 26],
+          [-pw / 2 + 26, ph / 2 - 26],
+          [pw / 2 - 26, ph / 2 - 26],
+        ];
+        ctx.strokeStyle = '#dc2626';
+        ctx.lineWidth = 2.5;
+        markPts.forEach(([mx, my]) => {
+          ctx.beginPath();
+          ctx.moveTo(mx - 10, my); ctx.lineTo(mx + 10, my);
+          ctx.moveTo(mx, my - 10); ctx.lineTo(mx, my + 10);
+          ctx.stroke();
+        });
+
+        // Color Calibration Swatches
+        const swatches = ['#ef4444', '#f59e0b', '#10b981', '#3b82f6', '#8b5cf6', '#0f172a', '#64748b', '#cbd5e1'];
+        swatches.forEach((col, i) => {
+          ctx.fillStyle = col;
+          ctx.fillRect(-pw / 2 + 44 + i * 71, -ph / 2 + 165, 62, 28);
+        });
+
+        // Body paragraphs
+        ctx.fillStyle = '#1e293b';
+        ctx.font = '18px Inter, sans-serif';
+        const lines = [
+          'Use this live sample sheet to test every OptiScan Studio feature:',
+          '• Adjust Horizontal & Vertical Keystone to straighten perspective.',
+          '• Rotate freely (-180° to +180°) with the dial, or Flip H / Flip V.',
+          '• Fine-tune Brightness, Contrast, Saturation, Hue, Gamma & Sharpness.',
+          '• Drag the red crop overlay corners to isolate the document area.',
+          '• Capture multiple scans, reorder via drag-and-drop, and export ZIP.'
+        ];
+        lines.forEach((line, i) => {
+          ctx.fillText(line, -pw / 2 + 44, -ph / 2 + 245 + i * 34);
+        });
+
+        // Sample Invoice Table
+        const ty = -ph / 2 + 475;
+        ctx.fillStyle = '#e2e8f0';
+        ctx.fillRect(-pw / 2 + 44, ty, pw - 88, 38);
+        ctx.fillStyle = '#0f172a';
+        ctx.font = 'bold 16px Inter, sans-serif';
+        ctx.fillText('ITEM DESCRIPTION', -pw / 2 + 58, ty + 25);
+        ctx.fillText('DPI TARGET', -pw / 2 + 370, ty + 25);
+        ctx.fillText('STATUS', -pw / 2 + 505, ty + 25);
+
+        const rows = [
+          ['Optical Homography Mesh', '300 DPI', 'VERIFIED'],
+          ['Color Pipeline', '300 DPI', 'ACTIVE'],
+          ['PNG pHYs / JPEG JFIF', '600 DPI', 'READY'],
+          ['ZIP Multi-Page Archive', '300 DPI', 'READY'],
+        ];
+        ctx.font = '16px Inter, sans-serif';
+        rows.forEach((r, idx) => {
+          const ry = ty + 38 + idx * 42;
+          ctx.strokeStyle = '#cbd5e1';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(-pw / 2 + 44, ry + 42);
+          ctx.lineTo(pw / 2 - 44, ry + 42);
+          ctx.stroke();
+
+          ctx.fillStyle = '#334155';
+          ctx.fillText(r[0], -pw / 2 + 58, ry + 27);
+          ctx.fillText(r[1], -pw / 2 + 370, ry + 27);
+          ctx.fillStyle = '#059669';
+          ctx.font = 'bold 15px Inter, sans-serif';
+          ctx.fillText(r[2], -pw / 2 + 505, ry + 27);
+          ctx.font = '16px Inter, sans-serif';
+        });
+
+        // Live timestamp footer
+        ctx.fillStyle = '#64748b';
+        ctx.font = '14px monospace';
+        const nowStr = new Date().toLocaleTimeString();
+        ctx.fillText(`LIVE DEMO SIGNAL • ${nowStr}`, -pw / 2 + 44, ph / 2 - 42);
+        ctx.restore();
+      }
+
+      /* =====================================================================
+         8. REAL-TIME WEBGL RENDERING ENGINE (Perspective + Color Filters)
+            Includes automatic 2D Canvas fallback if WebGL is unavailable
+         ===================================================================== */
+      let gl = null;
+      let glProgram = null;
+      let glTexture = null;
+      let glUniforms = {};
+      let useWebGL = false;
+      let fallback2dCtx = null;
+
+      const VERT_SRC = `
+        attribute vec2 aPos;
+        varying vec2 vUv;
+        void main() {
+          vUv = aPos * 0.5 + 0.5;
+          gl_Position = vec4(aPos, 0.0, 1.0);
+        }
+      `;
+
+      const FRAG_SRC = `
+        precision mediump float;
+        varying vec2 vUv;
+        uniform sampler2D uTex;
+        uniform vec2 uTexelSize;
+        uniform float uAspect;
+        uniform float uKeystoneH;
+        uniform float uKeystoneV;
+        uniform float uTilt;
+        uniform float uFlipH;
+        uniform float uFlipV;
+        uniform float uZoom;
+        uniform float uBrightness;
+        uniform float uContrast;
+        uniform float uSaturation;
+        uniform float uHue;
+        uniform float uGamma;
+        uniform float uSharpness;
+        uniform int uColorMode;
+
+        vec3 applyHue(vec3 col, float angle) {
+          const vec3 k = vec3(0.57735, 0.57735, 0.57735);
+          float cosA = cos(angle);
+          return col * cosA + cross(k, col) * sin(angle) + k * dot(k, col) * (1.0 - cosA);
+        }
+
+        vec2 transformUv(vec2 uv) {
+          // Convert to centered coordinates [-0.5, 0.5], flip Y for video texture
+          vec2 p = vec2(uv.x - 0.5, 0.5 - uv.y);
+
+          // 0. Horizontal & Vertical Mirror / Flip
+          if (uFlipH > 0.5) p.x = -p.x;
+          if (uFlipV > 0.5) p.y = -p.y;
+
+          // 1. Zoom
+          p /= max(0.1, uZoom);
+
+          // 2. Aspect-correct Free Rotation (-180° to +180°)
+          p.x *= uAspect;
+          float c = cos(-uTilt);
+          float s = sin(-uTilt);
+          p = vec2(p.x * c - p.y * s, p.x * s + p.y * c);
+          p.x /= uAspect;
+
+          // 3. Projective Keystone (Trapezoid) Homography
+          float w = 1.0 + uKeystoneH * p.x * 1.45 + uKeystoneV * p.y * 1.45;
+          if (w <= 0.12) return vec2(-1.0);
+          p /= w;
+
+          return p + 0.5;
+        }
+
+        void main() {
+          vec2 srcUv = transformUv(vUv);
+
+          // Render clean dark matte outside transformed trapezoid bounds
+          if (srcUv.x < 0.0 || srcUv.x > 1.0 || srcUv.y < 0.0 || srcUv.y > 1.0) {
+            gl_FragColor = vec4(0.059, 0.09, 0.165, 1.0);
+            return;
+          }
+
+          vec3 col = texture2D(uTex, srcUv).rgb;
+
+          // 4. Sharpness / Clarity (3x3 Unsharp Mask)
+          if (uSharpness > 0.001) {
+            vec3 n = texture2D(uTex, clamp(srcUv + vec2(0.0, -uTexelSize.y), 0.0, 1.0)).rgb;
+            vec3 s = texture2D(uTex, clamp(srcUv + vec2(0.0,  uTexelSize.y), 0.0, 1.0)).rgb;
+            vec3 e = texture2D(uTex, clamp(srcUv + vec2( uTexelSize.x, 0.0), 0.0, 1.0)).rgb;
+            vec3 w = texture2D(uTex, clamp(srcUv + vec2(-uTexelSize.x, 0.0), 0.0, 1.0)).rgb;
+            vec3 blur = (n + s + e + w) * 0.25;
+            col = col + (col - blur) * (uSharpness * 2.2);
+          }
+
+          col = clamp(col, 0.0, 1.0);
+
+          // 5. Gamma (style: >1 brightens midtones)
+          col = pow(max(col, vec3(0.0001)), vec3(1.0 / max(0.05, uGamma)));
+
+          // 6. Contrast
+          col = (col - 0.5) * uContrast + 0.5;
+
+          // 7. Brightness
+          col += uBrightness;
+
+          // 8. Hue Shift
+          if (abs(uHue) > 0.001) {
+            col = applyHue(col, uHue);
+          }
+
+          // 9. Saturation
+          float luma = dot(col, vec3(0.2126, 0.7152, 0.0722));
+          col = mix(vec3(luma), col, uSaturation);
+
+          // 10. Color Mode (Grayscale / Document Enhance)
+          if (uColorMode == 1) {
+            float g = dot(clamp(col, 0.0, 1.0), vec3(0.2126, 0.7152, 0.0722));
+            col = vec3(g);
+          } else if (uColorMode == 2) {
+            float g = dot(clamp(col, 0.0, 1.0), vec3(0.2126, 0.7152, 0.0722));
+            // Smooth S-curve paper whitening & crisp dark ink
+            float doc = smoothstep(0.18, 0.82, g);
+            col = vec3(mix(g, doc, 0.82));
+          }
+
+          gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
+        }
+      `;
+
+      function initRenderer() {
+        try {
+          gl = els.previewCanvas.getContext('webgl', { preserveDrawingBuffer: true, antialias: true })
+            || els.previewCanvas.getContext('experimental-webgl', { preserveDrawingBuffer: true });
+          if (!gl) throw new Error('WebGL unavailable');
+
+          const compile = (type, src) => {
+            const sh = gl.createShader(type);
+            gl.shaderSource(sh, src);
+            gl.compileShader(sh);
+            if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+              throw new Error(gl.getShaderInfoLog(sh));
+            }
+            return sh;
+          };
+
+          const vs = compile(gl.VERTEX_SHADER, VERT_SRC);
+          const fs = compile(gl.FRAGMENT_SHADER, FRAG_SRC);
+          glProgram = gl.createProgram();
+          gl.attachShader(glProgram, vs);
+          gl.attachShader(glProgram, fs);
+          gl.linkProgram(glProgram);
+          if (!gl.getProgramParameter(glProgram, gl.LINK_STATUS)) {
+            throw new Error(gl.getProgramInfoLog(glProgram));
+          }
+          gl.useProgram(glProgram);
+
+          const buf = gl.createBuffer();
+          gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+          gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+          const aPos = gl.getAttribLocation(glProgram, 'aPos');
+          gl.enableVertexAttribArray(aPos);
+          gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+          glTexture = gl.createTexture();
+          gl.bindTexture(gl.TEXTURE_2D, glTexture);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+          const names = [
+            'uTex', 'uTexelSize', 'uAspect', 'uKeystoneH', 'uKeystoneV', 'uTilt', 'uFlipH', 'uFlipV', 'uZoom',
+            'uBrightness', 'uContrast', 'uSaturation', 'uHue', 'uGamma', 'uSharpness', 'uColorMode'
+          ];
+          names.forEach(n => { glUniforms[n] = gl.getUniformLocation(glProgram, n); });
+          useWebGL = true;
+        } catch (err) {
+          console.warn('WebGL init failed, falling back to 2D Canvas:', err);
+          useWebGL = false;
+          fallback2dCtx = els.previewCanvas.getContext('2d');
+        }
+      }
+
+      // Auto-Mode Histogram Analyzer (runs gently every 400ms when Auto is ON)
+      const autoSampleCanvas = document.createElement('canvas');
+      autoSampleCanvas.width = 64;
+      autoSampleCanvas.height = 36;
+      const autoSampleCtx = autoSampleCanvas.getContext('2d', { willReadFrequently: true });
+      let lastAutoEval = 0;
+
+      function evaluateAutoExposure(sourceEl, nowMs) {
+        if (!state.settings.autoMode || nowMs - lastAutoEval < 380) return;
+        lastAutoEval = nowMs;
+        try {
+          autoSampleCtx.drawImage(sourceEl, 0, 0, 64, 36);
+          const data = autoSampleCtx.getImageData(0, 0, 64, 36).data;
+          const hist = new Uint32Array(256);
+          const total = 64 * 36;
+          for (let i = 0; i < data.length; i += 4) {
+            const lum = Math.round(0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2]);
+            hist[lum]++;
+          }
+          // Find 3rd and 97th percentile luminance
+          let acc = 0, pLow = 0, pHigh = 255;
+          for (let i = 0; i < 256; i++) {
+            acc += hist[i];
+            if (acc >= total * 0.03) { pLow = i; break; }
+          }
+          acc = 0;
+          for (let i = 255; i >= 0; i--) {
+            acc += hist[i];
+            if (acc >= total * 0.03) { pHigh = i; break; }
+          }
+          const span = Math.max(40, pHigh - pLow);
+          const targetContrast = Math.min(45, Math.max(-10, ((235 / span) - 1) * 55));
+          const mid = (pLow + pHigh) * 0.5;
+          const targetBrightness = Math.min(30, Math.max(-30, ((138 - mid) / 255) * 85));
+
+          // Smooth lerp to avoid flicker
+          state.autoOffsets.contrast += (targetContrast - state.autoOffsets.contrast) * 0.3;
+          state.autoOffsets.brightness += (targetBrightness - state.autoOffsets.brightness) * 0.3;
+        } catch (e) {}
+      }
+
+      function renderFrame(nowMs) {
+        requestAnimationFrame(renderFrame);
+        if (state.sourceMode === 'none') return;
+
+        let sourceEl = null;
+        if (state.sourceMode === 'webcam') {
+          if (els.video.readyState < 2 || els.video.videoWidth === 0) return;
+          sourceEl = els.video;
+        } else if (state.sourceMode === 'demo') {
+          renderDemoSheet(nowMs);
+          sourceEl = demoCanvas;
+        }
+
+        if (!sourceEl) return;
+
+        // Keep canvas dimensions locked to exact incoming source resolution
+        const sw = state.sourceMode === 'webcam' ? els.video.videoWidth : demoCanvas.width;
+        const sh = state.sourceMode === 'webcam' ? els.video.videoHeight : demoCanvas.height;
+        if (els.previewCanvas.width !== sw || els.previewCanvas.height !== sh) {
+          els.previewCanvas.width = sw;
+          els.previewCanvas.height = sh;
+          state.sourceWidth = sw;
+          state.sourceHeight = sh;
+          els.previewStage.style.aspectRatio = `${sw} / ${sh}`;
+          els.resolutionBadge.textContent = `${sw} × ${sh}`;
+          updateCropOverlayUI();
+        }
+
+        evaluateAutoExposure(sourceEl, nowMs);
+
+        const g = state.settings.geometry;
+        const c = state.settings.color;
+        const autoB = state.settings.autoMode ? state.autoOffsets.brightness : 0;
+        const autoC = state.settings.autoMode ? state.autoOffsets.contrast : 0;
+
+        const effBrightness = (c.brightness + autoB) / 100.0;
+        const effContrast = Math.max(0.1, 1.0 + (c.contrast + autoC) / 100.0);
+        const effSaturation = Math.max(0.0, 1.0 + c.saturation / 100.0);
+        const effHueRad = (c.hue * Math.PI) / 180.0;
+        const effRotRad = (g.rotation * Math.PI) / 180.0;
+        const colorModeInt = state.settings.colorMode === 'grayscale' ? 1 : state.settings.colorMode === 'document' ? 2 : 0;
+
+        if (useWebGL && gl) {
+          gl.viewport(0, 0, sw, sh);
+          gl.bindTexture(gl.TEXTURE_2D, glTexture);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, sourceEl);
+
+          gl.uniform1i(glUniforms.uTex, 0);
+          gl.uniform2f(glUniforms.uTexelSize, 1.0 / sw, 1.0 / sh);
+          gl.uniform1f(glUniforms.uAspect, sw / sh);
+          gl.uniform1f(glUniforms.uKeystoneH, g.keystoneH / 100.0);
+          gl.uniform1f(glUniforms.uKeystoneV, g.keystoneV / 100.0);
+          gl.uniform1f(glUniforms.uTilt, effRotRad);
+          gl.uniform1f(glUniforms.uFlipH, g.flipH ? 1.0 : 0.0);
+          gl.uniform1f(glUniforms.uFlipV, g.flipV ? 1.0 : 0.0);
+          gl.uniform1f(glUniforms.uZoom, g.zoom / 100.0);
+          gl.uniform1f(glUniforms.uBrightness, effBrightness);
+          gl.uniform1f(glUniforms.uContrast, effContrast);
+          gl.uniform1f(glUniforms.uSaturation, effSaturation);
+          gl.uniform1f(glUniforms.uHue, effHueRad);
+          gl.uniform1f(glUniforms.uGamma, c.gamma);
+          gl.uniform1f(glUniforms.uSharpness, c.sharpness / 100.0);
+          gl.uniform1i(glUniforms.uColorMode, colorModeInt);
+
+          gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        } else if (fallback2dCtx) {
+          const ctx = fallback2dCtx;
+          ctx.save();
+          ctx.fillStyle = '#0f172a';
+          ctx.fillRect(0, 0, sw, sh);
+          ctx.filter = `brightness(${Math.max(0, 1 + effBrightness)}) contrast(${effContrast}) saturate(${effSaturation}) hue-rotate(${c.hue}deg) ${colorModeInt > 0 ? 'grayscale(1)' : ''}`;
+          ctx.translate(sw / 2, sh / 2);
+          ctx.scale((g.flipH ? -1 : 1) * (g.zoom / 100), (g.flipV ? -1 : 1) * (g.zoom / 100));
+          ctx.rotate(effRotRad);
+          ctx.drawImage(sourceEl, -sw / 2, -sh / 2, sw, sh);
+          ctx.restore();
+        }
+      }
+
+      /* =====================================================================
+         9. WEBCAM ACCESS & DEVICE MANAGEMENT
+         ===================================================================== */
+      function setSignalStatus(status, text) {
+        const dotColors = {
+          live: 'bg-emerald-500 animate-pulse',
+          demo: 'bg-indigo-500 animate-pulse',
+          error: 'bg-rose-500',
+          idle: 'bg-slate-400',
+        };
+        els.signalDot.className = `w-2 h-2 rounded-full ${dotColors[status] || dotColors.idle}`;
+        els.signalText.textContent = text;
+      }
+
+      function stopCurrentStream() {
+        if (state.stream) {
+          state.stream.getTracks().forEach(t => t.stop());
+          state.stream = null;
+        }
+        els.video.srcObject = null;
+      }
+
+      async function enumerateCameras() {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+          els.cameraSelect.innerHTML = '<option value="">Camera API unavailable</option>';
+          return;
+        }
+        try {
+          const devices = await navigator.mediaDevices.enumerateDevices();
+          const videoInputs = devices.filter(d => d.kind === 'videoinput');
+          els.cameraSelect.innerHTML = '';
+
+          if (videoInputs.length === 0) {
+            els.cameraSelect.innerHTML = '<option value="">No webcam detected</option>';
+            return;
+          }
+
+          videoInputs.forEach((dev, idx) => {
+            const opt = document.createElement('option');
+            opt.value = dev.deviceId;
+            opt.textContent = dev.label || `Camera ${idx + 1}`;
+            if (dev.deviceId === state.activeDeviceId) opt.selected = true;
+            els.cameraSelect.appendChild(opt);
+          });
+        } catch (err) {
+          console.error('Device enumeration error:', err);
+        }
+      }
+
+      async function startWebcam(deviceId = '') {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          els.permissionTitle.textContent = 'Camera API Unavailable';
+          els.permissionDesc.textContent = 'Your browser context does not expose webcam access (HTTPS or localhost is required). You can still explore every feature using Demo Mode.';
+          setSignalStatus('error', 'No Camera API');
+          showToast('Camera API unavailable in this context. Try Demo Mode!', 'warning');
+          return;
+        }
+
+        stopCurrentStream();
+        setSignalStatus('idle', 'Requesting camera...');
+
+        const constraints = {
+          audio: false,
+          video: deviceId
+            ? { deviceId: { exact: deviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } }
+            : { width: { ideal: 1920 }, height: { ideal: 1080 }, facingMode: 'environment' },
+        };
+
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia(constraints);
+          state.stream = stream;
+          const track = stream.getVideoTracks()[0];
+          state.activeDeviceId = track ? (track.getSettings().deviceId || deviceId) : deviceId;
+
+          els.video.srcObject = stream;
+          await els.video.play();
+
+          state.sourceMode = 'webcam';
+          els.permissionOverlay.classList.add('hidden');
+          els.cropMaskContainer.classList.remove('hidden');
+          els.cropBox.classList.remove('hidden');
+          setSignalStatus('live', 'Webcam Live');
+          els.toggleDemoBtn.textContent = 'Demo Sheet';
+
+          await enumerateCameras();
+          showToast('Webcam connected successfully', 'success', 2400);
+        } catch (err) {
+          console.warn('Webcam error:', err);
+          state.sourceMode = 'none';
+          els.permissionOverlay.classList.remove('hidden');
+          els.cropMaskContainer.classList.add('hidden');
+          els.cropBox.classList.add('hidden');
+
+          if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+            els.permissionTitle.textContent = 'Camera Permission Denied';
+            els.permissionDesc.textContent = 'Please allow camera access in your browser address bar, then click "Grant Camera Access" again — or launch Demo Mode below.';
+          } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+            els.permissionTitle.textContent = 'No Webcam Detected';
+            els.permissionDesc.textContent = 'We could not find a connected camera on this device. Connect a webcam or click "Demo Mode / Sample Sheet" to test all features.';
+          } else {
+            els.permissionTitle.textContent = 'Unable to Start Camera';
+            els.permissionDesc.textContent = `Camera error: ${err.message || err.name}. Try another device or use Demo Mode.`;
+          }
+          setSignalStatus('error', 'Camera Blocked');
+        }
+      }
+
+      function startDemoMode() {
+        stopCurrentStream();
+        state.sourceMode = 'demo';
+        els.permissionOverlay.classList.add('hidden');
+        els.cropMaskContainer.classList.remove('hidden');
+        els.cropBox.classList.remove('hidden');
+        setSignalStatus('demo', 'Demo Sheet Active');
+        els.toggleDemoBtn.textContent = 'Use Webcam';
+        showToast('Demo Mode active — testing with live sample sheet', 'info', 2600);
+      }
+
+      els.grantCameraBtn.addEventListener('click', () => startWebcam(els.cameraSelect.value));
+      els.startDemoOverlayBtn.addEventListener('click', startDemoMode);
+      els.toggleDemoBtn.addEventListener('click', () => {
+        if (state.sourceMode === 'demo') startWebcam(els.cameraSelect.value);
+        else startDemoMode();
+      });
+      els.cameraSelect.addEventListener('change', (e) => {
+        if (e.target.value) startWebcam(e.target.value);
+      });
+      els.refreshCamerasBtn.addEventListener('click', async () => {
+        await enumerateCameras();
+        showToast('Camera list refreshed', 'info', 1800);
+      });
+
+      /* =====================================================================
+         10. JSON SETTINGS EXPORT & STRICT VALIDATED IMPORT
+         ===================================================================== */
+      els.saveJsonBtn.addEventListener('click', () => {
+        try {
+          const payload = JSON.stringify(state.settings, null, 2);
+          const blob = new Blob([payload], { type: 'application/json' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `optiscan-settings-${new Date().toISOString().slice(0, 10)}.json`;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(url);
+          showToast('Settings exported as JSON', 'success', 2400);
+        } catch (err) {
+          showToast('Failed to export settings JSON', 'error');
+        }
+      });
+
+      els.loadJsonBtn.addEventListener('click', () => {
+        els.jsonFileInput.value = '';
+        els.jsonFileInput.click();
+      });
+
+      function validateSettingsPayload(obj) {
+        if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
+          return 'Root JSON must be a valid settings object.';
+        }
+        if (obj.schema !== 'optiscan-studio-settings-v1') {
+          return 'Missing or unsupported OptiScan settings schema identifier.';
+        }
+        if (typeof obj.autoMode !== 'boolean') {
+          return 'Field "autoMode" must be a boolean.';
+        }
+        if (!['color', 'grayscale', 'document'].includes(obj.colorMode)) {
+          return 'Field "colorMode" must be "color", "grayscale", or "document".';
+        }
+
+        for (const group of ['geometry', 'color', 'crop']) {
+          if (!obj[group] || typeof obj[group] !== 'object' || Array.isArray(obj[group])) {
+            return `Missing required "${group}" configuration section.`;
+          }
+          for (const def of PARAM_DEFS[group]) {
+            const val = obj[group][def.key];
+            if (typeof val !== 'number' || !Number.isFinite(val)) {
+              return `Invalid numeric value for "${group}.${def.key}".`;
+            }
+            if (val < def.min || val > def.max) {
+              return `"${group}.${def.key}" (${val}) is outside allowed range [${def.min}, ${def.max}].`;
+            }
+          }
+        }
+
+        if (typeof obj.geometry.flipH !== 'boolean' || typeof obj.geometry.flipV !== 'boolean') {
+          return 'Fields "geometry.flipH" and "geometry.flipV" must be booleans.';
+        }
+
+        if (obj.crop.x + obj.crop.w > 100.01 || obj.crop.y + obj.crop.h > 100.01) {
+          return 'Crop coordinates exceed 100% image bounds.';
+        }
+        return null; // Valid
+      }
+
+      els.jsonFileInput.addEventListener('change', (e) => {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = () => {
+          try {
+            const parsed = JSON.parse(String(reader.result));
+            const errorMsg = validateSettingsPayload(parsed);
+            if (errorMsg) {
+              showToast(`Invalid Settings JSON: ${errorMsg}`, 'error', 4800);
+              return;
+            }
+            state.settings = {
+              schema: parsed.schema,
+              autoMode: parsed.autoMode,
+              colorMode: parsed.colorMode,
+              geometry: { ...parsed.geometry },
+              color: { ...parsed.color },
+              crop: { ...parsed.crop },
+            };
+            syncAllControlsFromState();
+            showToast(`Loaded settings from "${file.name}"`, 'success', 3000);
+          } catch (parseErr) {
+            showToast('Malformed JSON file: syntax error detected and rejected.', 'error', 4600);
+          }
+        };
+        reader.onerror = () => showToast('Failed to read the selected file.', 'error');
+        reader.readAsText(file);
+      });
+
+      /* =====================================================================
+         11. CAPTURE SCAN & DRAG-AND-DROP FILMSTRIP CAROUSEL
+         ===================================================================== */
+      function triggerShutterAnimation() {
+        els.shutterFlash.classList.remove('animate-shutter-flash');
+        void els.shutterFlash.offsetWidth; // Force reflow
+        els.shutterFlash.classList.add('animate-shutter-flash');
+      }
+
+      function captureScan() {
+        if (state.sourceMode === 'none') {
+          showToast('Start your webcam or Demo Mode before capturing.', 'warning');
+          return;
+        }
+
+        const srcCanvas = els.previewCanvas;
+        const sw = srcCanvas.width;
+        const sh = srcCanvas.height;
+        if (sw === 0 || sh === 0) return;
+
+        const { x, y, w, h } = state.settings.crop;
+        const sx = Math.round((x / 100) * sw);
+        const sy = Math.round((y / 100) * sh);
+        const cw = Math.max(1, Math.round((w / 100) * sw));
+        const ch = Math.max(1, Math.round((h / 100) * sh));
+
+        const outCanvas = document.createElement('canvas');
+        outCanvas.width = cw;
+        outCanvas.height = ch;
+        const outCtx = outCanvas.getContext('2d');
+        outCtx.drawImage(srcCanvas, sx, sy, cw, ch, 0, 0, cw, ch);
+
+        const dataUrl = outCanvas.toDataURL('image/png');
+        const scanObj = {
+          id: state.nextScanId++,
+          dataUrl,
+          width: cw,
+          height: ch,
+          timestamp: Date.now(),
+        };
+
+        state.scans.push(scanObj);
+        triggerShutterAnimation();
+        renderCarousel();
+
+        // Scroll carousel smoothly to newest item
+        requestAnimationFrame(() => {
+          els.carouselTrack.scrollTo({ left: els.carouselTrack.scrollWidth, behavior: 'smooth' });
+        });
+        showToast(`Captured Scan #${state.scans.length} (${cw}×${ch}px)`, 'success', 2000);
+      }
+
+      els.captureScanBtn.addEventListener('click', captureScan);
+
+      // Keyboard shortcut: Space to capture (when not typing in inputs)
+      window.addEventListener('keydown', (e) => {
+        if (e.code === 'Space' && !['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(document.activeElement.tagName)) {
+          e.preventDefault();
+          captureScan();
+        }
+      });
+
+      function renderCarousel() {
+        // Clear existing cards except empty state
+        Array.from(els.carouselTrack.children).forEach(child => {
+          if (child.id !== 'emptyCarouselState') child.remove();
+        });
+
+        const count = state.scans.length;
+        els.scanCountBadge.textContent = `${count} ${count === 1 ? 'page' : 'pages'}`;
+        els.emptyCarouselState.classList.toggle('hidden', count > 0);
+        els.downloadZipBtn.disabled = count === 0;
+
+        state.scans.forEach((scan, index) => {
+          const card = document.createElement('div');
+          card.className = 'scan-card group relative shrink-0 w-36 sm:w-40 rounded-xl bg-slate-100 dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700/80 p-2 flex flex-col gap-1.5 cursor-grab active:cursor-grabbing transition-all duration-200 hover:shadow-md animate-fade-slide-in';
+          card.draggable = true;
+          card.dataset.scanId = String(scan.id);
+
+          card.innerHTML = `
+            <div class="relative w-full h-24 rounded-lg overflow-hidden bg-slate-900 flex items-center justify-center">
+              <img src="${scan.dataUrl}" alt="Scan #${index + 1}" class="w-full h-full object-contain pointer-events-none select-none" />
+              <span class="absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-slate-900/80 text-white backdrop-blur-sm">
+                #${index + 1}
+              </span>
+            </div>
+            <div class="flex items-center justify-between px-0.5 text-[10px] font-mono text-slate-500 dark:text-slate-400">
+              <span>${scan.width}×${scan.height}</span>
+              <span class="uppercase font-sans font-semibold text-blue-600 dark:text-blue-400">Inspect</span>
+            </div>
+            <button type="button" class="delete-scan-btn absolute -top-2 -right-2 w-6 h-6 rounded-full bg-rose-600 hover:bg-rose-500 text-white shadow-md flex items-center justify-center transition-transform hover:scale-110" title="Remove Scan #${index + 1}">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+            </button>
+          `;
+
+          // Inspect in Lightbox
+          card.addEventListener('click', (e) => {
+            if (e.target.closest('.delete-scan-btn')) return;
+            els.lightboxTitle.textContent = `Scan #${index + 1} — ${scan.width} × ${scan.height} px`;
+            els.lightboxImg.src = scan.dataUrl;
+            els.lightboxModal.classList.remove('hidden');
+            els.lightboxModal.classList.add('flex');
+          });
+
+          // Delete individual scan
+          card.querySelector('.delete-scan-btn').addEventListener('click', (e) => {
+            e.stopPropagation();
+            state.scans = state.scans.filter(s => s.id !== scan.id);
+            renderCarousel();
+          });
+
+          // HTML5 Drag-and-Drop Reordering
+          card.addEventListener('dragstart', (e) => {
+            state.draggedScanId = scan.id;
+            card.classList.add('dragging');
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', String(scan.id));
+          });
+          card.addEventListener('dragend', () => {
+            state.draggedScanId = null;
+            card.classList.remove('dragging');
+            document.querySelectorAll('.scan-card.drag-over').forEach(el => el.classList.remove('drag-over'));
+          });
+          card.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            if (state.draggedScanId !== null && state.draggedScanId !== scan.id) {
+              card.classList.add('drag-over');
+            }
+          });
+          card.addEventListener('dragleave', () => card.classList.remove('drag-over'));
+          card.addEventListener('drop', (e) => {
+            e.preventDefault();
+            card.classList.remove('drag-over');
+            if (state.draggedScanId === null || state.draggedScanId === scan.id) return;
+            const fromIdx = state.scans.findIndex(s => s.id === state.draggedScanId);
+            const toIdx = state.scans.findIndex(s => s.id === scan.id);
+            if (fromIdx === -1 || toIdx === -1) return;
+            const [moved] = state.scans.splice(fromIdx, 1);
+            state.scans.splice(toIdx, 0, moved);
+            renderCarousel();
+          });
+
+          els.carouselTrack.appendChild(card);
+        });
+      }
+
+      // Lightbox Close Handlers
+      const closeLightbox = () => {
+        els.lightboxModal.classList.add('hidden');
+        els.lightboxModal.classList.remove('flex');
+      };
+      els.closeLightboxBtn.addEventListener('click', closeLightbox);
+      els.lightboxModal.addEventListener('click', (e) => {
+        if (e.target === els.lightboxModal) closeLightbox();
+      });
+
+      /* =====================================================================
+         12. BINARY FORMAT ENCODERS & REAL DPI METADATA INJECTION
+             - PNG: injects valid pHYs chunk with CRC32
+             - JPEG: patches/inserts JFIF APP0 DPI density bytes
+             - BMP: pure-JS 24-bit BMP encoder with XPelsPerMeter/YPelsPerMeter
+             - WebP: native canvas toBlob export
+         ===================================================================== */
+      // Precompute CRC32 table for PNG pHYs chunk
+      const CRC_TABLE = (() => {
+        const table = new Uint32Array(256);
+        for (let n = 0; n < 256; n++) {
+          let c = n;
+          for (let k = 0; k < 8; k++) {
+            c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+          }
+          table[n] = c >>> 0;
+        }
+        return table;
+      })();
+
+      function crc32(bytes) {
+        let c = 0xffffffff;
+        for (let i = 0; i < bytes.length; i++) {
+          c = CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+        }
+        return (c ^ 0xffffffff) >>> 0;
+      }
+
+      function injectPngDpi(pngBytes, dpi) {
+        const ppm = Math.round(dpi / 0.0254); // pixels per meter
+        // Build 21-byte pHYs chunk: 4 len + 4 type + 9 data + 4 crc
+        const phys = new Uint8Array(21);
+        const dv = new DataView(phys.buffer);
+        dv.setUint32(0, 9, false); // data length = 9
+        phys[4] = 0x70; phys[5] = 0x48; phys[6] = 0x59; phys[7] = 0x73; // "pHYs"
+        dv.setUint32(8, ppm, false);  // X pixels per unit
+        dv.setUint32(12, ppm, false); // Y pixels per unit
+        phys[16] = 1;                 // unit = meter
+        const checksum = crc32(phys.subarray(4, 17));
+        dv.setUint32(17, checksum, false);
+
+        // Insert right after PNG signature (8) + IHDR chunk (25) = offset 33
+        const insertAt = 33;
+        const out = new Uint8Array(pngBytes.length + phys.length);
+        out.set(pngBytes.subarray(0, insertAt), 0);
+        out.set(phys, insertAt);
+        out.set(pngBytes.subarray(insertAt), insertAt + phys.length);
+        return out;
+      }
+
+      function injectJpegDpi(jpegBytes, dpi) {
+        // Check for existing JFIF APP0 marker at bytes 2..3 (FF E0)
+        if (jpegBytes.length > 18 && jpegBytes[0] === 0xff && jpegBytes[1] === 0xd8 && jpegBytes[2] === 0xff && jpegBytes[3] === 0xe0) {
+          // Verify "JFIF\0"
+          if (jpegBytes[6] === 0x4a && jpegBytes[7] === 0x46 && jpegBytes[8] === 0x49 && jpegBytes[9] === 0x46) {
+            const out = new Uint8Array(jpegBytes);
+            out[13] = 1; // units = dots per inch
+            out[14] = (dpi >> 8) & 0xff;
+            out[15] = dpi & 0xff;
+            out[16] = (dpi >> 8) & 0xff;
+            out[17] = dpi & 0xff;
+            return out;
+          }
+        }
+        // Otherwise insert a fresh 18-byte JFIF APP0 segment after SOI (FF D8)
+        const app0 = new Uint8Array([
+          0xff, 0xe0, 0x00, 0x10,
+          0x4a, 0x46, 0x49, 0x46, 0x00, // JFIF\0
+          0x01, 0x01,                   // version 1.1
+          0x01,                         // units = DPI
+          (dpi >> 8) & 0xff, dpi & 0xff,
+          (dpi >> 8) & 0xff, dpi & 0xff,
+          0x00, 0x00                    // no thumbnail
+        ]);
+        const out = new Uint8Array(jpegBytes.length + app0.length);
+        out.set(jpegBytes.subarray(0, 2), 0);
+        out.set(app0, 2);
+        out.set(jpegBytes.subarray(2), 2 + app0.length);
+        return out;
+      }
+
+      function encodeBmpWithDpi(canvas, dpi) {
+        const w = canvas.width;
+        const h = canvas.height;
+        const ctx = canvas.getContext('2d');
+        const imgData = ctx.getImageData(0, 0, w, h).data;
+        const rowStride = Math.ceil((w * 3) / 4) * 4;
+        const pixelBytes = rowStride * h;
+        const fileSize = 54 + pixelBytes;
+        const buf = new ArrayBuffer(fileSize);
+        const dv = new DataView(buf);
+        const u8 = new Uint8Array(buf);
+        const ppm = Math.round(dpi / 0.0254);
+
+        // BITMAPFILEHEADER (14 bytes)
+        u8[0] = 0x42; u8[1] = 0x4d; // "BM"
+        dv.setUint32(2, fileSize, true);
+        dv.setUint32(10, 54, true); // pixel array offset
+
+        // BITMAPINFOHEADER (40 bytes)
+        dv.setUint32(14, 40, true);
+        dv.setInt32(18, w, true);
+        dv.setInt32(22, h, true);   // bottom-up
+        dv.setUint16(26, 1, true);  // color planes
+        dv.setUint16(28, 24, true); // 24-bit RGB
+        dv.setUint32(34, pixelBytes, true);
+        dv.setInt32(38, ppm, true); // XPelsPerMeter
+        dv.setInt32(42, ppm, true); // YPelsPerMeter
+
+        // Write BGR rows bottom-to-top
+        for (let y = 0; y < h; y++) {
+          const srcRow = (h - 1 - y) * w * 4;
+          const dstRow = 54 + y * rowStride;
+          for (let x = 0; x < w; x++) {
+            const si = srcRow + x * 4;
+            const di = dstRow + x * 3;
+            u8[di]     = imgData[si + 2]; // B
+            u8[di + 1] = imgData[si + 1]; // G
+            u8[di + 2] = imgData[si];     // R
+          }
+        }
+        return u8;
+      }
+
+      function loadImageFromDataUrl(dataUrl) {
+        return new Promise((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => resolve(img);
+          img.onerror = reject;
+          img.src = dataUrl;
+        });
+      }
+
+      async function convertScanToBinary(scan, format, dpi, quality) {
+        const img = await loadImageFromDataUrl(scan.dataUrl);
+        const c = document.createElement('canvas');
+        c.width = scan.width;
+        c.height = scan.height;
+        const ctx = c.getContext('2d');
+        if (format === 'jpeg' || format === 'bmp') {
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, c.width, c.height);
+        }
+        ctx.drawImage(img, 0, 0);
+
+        if (format === 'bmp') {
+          return { bytes: encodeBmpWithDpi(c, dpi), ext: 'bmp' };
+        }
+
+        const mimeMap = { png: 'image/png', jpeg: 'image/jpeg', webp: 'image/webp' };
+        const extMap = { png: 'png', jpeg: 'jpg', webp: 'webp' };
+        const blob = await new Promise(res => c.toBlob(res, mimeMap[format], quality));
+        const rawBytes = new Uint8Array(await blob.arrayBuffer());
+
+        if (format === 'png') {
+          return { bytes: injectPngDpi(rawBytes, dpi), ext: extMap[format] };
+        }
+        if (format === 'jpeg') {
+          return { bytes: injectJpegDpi(rawBytes, dpi), ext: extMap[format] };
+        }
+        return { bytes: rawBytes, ext: extMap[format] };
+      }
+
+      /* =====================================================================
+         13. EXPORT UI CONTROLS & ZIP DOWNLOAD
+         ===================================================================== */
+      els.exportDpiPreset.addEventListener('change', (e) => {
+        if (e.target.value !== 'custom') {
+          els.exportDpiInput.value = e.target.value;
+        }
+      });
+      els.exportDpiInput.addEventListener('input', () => {
+        const v = String(els.exportDpiInput.value);
+        const presets = ['72', '150', '300', '600'];
+        els.exportDpiPreset.value = presets.includes(v) ? v : 'custom';
+      });
+      els.exportQualityInput.addEventListener('input', (e) => {
+        els.exportQualityLabel.textContent = `${e.target.value}%`;
+      });
+
+      els.downloadZipBtn.addEventListener('click', async () => {
+        if (state.scans.length === 0) {
+          showToast('Capture at least one scan before exporting.', 'warning');
+          return;
+        }
+        if (typeof JSZip === 'undefined') {
+          showToast('JSZip library failed to load. Check your internet connection or local script path.', 'error');
+          return;
+        }
+
+        const format = els.exportFormatSelect.value;
+        const dpi = Math.min(1200, Math.max(72, parseInt(els.exportDpiInput.value, 10) || 300));
+        const quality = (parseInt(els.exportQualityInput.value, 10) || 92) / 100;
+
+        els.downloadZipBtn.disabled = true;
+        els.exportProgressWrap.classList.remove('hidden');
+        els.exportProgressBar.style.width = '0%';
+        els.exportProgressPct.textContent = '0%';
+
+        try {
+          const zip = new JSZip();
+          const total = state.scans.length;
+
+          for (let i = 0; i < total; i++) {
+            els.exportProgressText.textContent = `Encoding scan ${i + 1} of ${total} (${format.toUpperCase()} @ ${dpi} DPI)...`;
+            const { bytes, ext } = await convertScanToBinary(state.scans[i], format, dpi, quality);
+            const filename = `scan_${String(i + 1).padStart(3, '0')}.${ext}`;
+            zip.file(filename, bytes);
+
+            const pct = Math.round(((i + 1) / total) * 75);
+            els.exportProgressBar.style.width = `${pct}%`;
+            els.exportProgressPct.textContent = `${pct}%`;
+          }
+
+          els.exportProgressText.textContent = 'Compressing ZIP archive...';
+          const zipBlob = await zip.generateAsync({ type: 'blob' }, (meta) => {
+            const pct = 75 + Math.round(meta.percent * 0.25);
+            els.exportProgressBar.style.width = `${pct}%`;
+            els.exportProgressPct.textContent = `${pct}%`;
+          });
+
+          const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+          const url = URL.createObjectURL(zipBlob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `OptiScan_${stamp}_${dpi}DPI.zip`;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(url);
+
+          els.exportProgressText.textContent = `Export complete — ${total} ${total === 1 ? 'file' : 'files'} packaged!`;
+          showToast(`Downloaded ZIP with ${total} scans (${format.toUpperCase()}, ${dpi} DPI)`, 'success', 3800);
+        } catch (err) {
+          console.error('ZIP export error:', err);
+          showToast('Error while creating ZIP archive.', 'error');
+        } finally {
+          els.downloadZipBtn.disabled = state.scans.length === 0;
+          setTimeout(() => {
+            els.exportProgressWrap.classList.add('hidden');
+          }, 2600);
+        }
+      });
+
+      /* =====================================================================
+         14. RESET ALL WORKSPACE MODAL
+         ===================================================================== */
+      els.resetAllBtn.addEventListener('click', () => {
+        els.resetModal.classList.remove('hidden');
+        els.resetModal.classList.add('flex');
+      });
+      const closeResetModal = () => {
+        els.resetModal.classList.add('hidden');
+        els.resetModal.classList.remove('flex');
+      };
+      els.cancelResetBtn.addEventListener('click', closeResetModal);
+      els.resetModal.addEventListener('click', (e) => {
+        if (e.target === els.resetModal) closeResetModal();
+      });
+      els.confirmResetBtn.addEventListener('click', () => {
+        state.scans = [];
+        state.nextScanId = 1;
+        if (els.resetIncludeSettings.checked) {
+          state.settings = createDefaultSettings();
+          state.autoOffsets = { brightness: 0, contrast: 0 };
+          syncAllControlsFromState();
+        }
+        renderCarousel();
+        closeResetModal();
+        showToast('Workspace reset successfully', 'info', 2500);
+      });
+
+      /* =====================================================================
+         15. INITIALIZATION
+         ===================================================================== */
+      initRenderer();
+      syncAllControlsFromState();
+      renderCarousel();
+      enumerateCameras();
+      requestAnimationFrame(renderFrame);
+    })();
+  </script>
+</body>
+</html>
